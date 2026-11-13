@@ -84,11 +84,14 @@ fi
 
 # ---------- 5. 二进制与安装目录 ----------
 phase "5/5 二进制与安装目录"
-if [ -x "${MIHOMO_BIN:-}" ]; then
+if [ "${MIHOMO_INSTALLED:-0}" = "1" ] && [ -x "${MIHOMO_BIN:-}" ]; then
+    # 仅删除本工具安装的二进制；复用用户已有部署的不动
     if confirm "删除 mihomo 二进制 $MIHOMO_BIN ?"; then
         rm -f "$MIHOMO_BIN"
         ok "已删除"
     fi
+elif [ -x "${MIHOMO_BIN:-}" ]; then
+    info "mihomo 二进制为复用的已有部署（$MIHOMO_BIN），不删除"
 fi
 rm -f "$HOME/.local/bin/guard-system-proxy-kit.sh"
 if [ -d "$INSTALL_HOME" ]; then

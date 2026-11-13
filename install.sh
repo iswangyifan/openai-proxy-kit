@@ -89,6 +89,7 @@ UNIT_CONTROLLER='$UNIT_CONTROLLER'
 UNIT_GUARD_SERVICE='$UNIT_GUARD_SERVICE'
 UNIT_GUARD_TIMER='$UNIT_GUARD_TIMER'
 NODE_BIN='${NODE_BIN:-}'
+MIHOMO_INSTALLED='${MIHOMO_INSTALLED:-0}'
 CONTROLLER_DIR='$CONTROLLER_DIR'
 CONTROLLER_ENV='$CONTROLLER_ENV'
 EOF
@@ -148,6 +149,7 @@ install_mihomo() {
     phase "阶段 2/9 mihomo 核心"
     if [ -x "$MIHOMO_BIN" ]; then
         ok "已存在 $($MIHOMO_BIN -v 2>/dev/null | head -1 | cut -d' ' -f1-3)，复用: $MIHOMO_BIN"
+        MIHOMO_INSTALLED=0   # 复用已有二进制（可能是用户其他部署的），卸载时不删
         return
     fi
     local arch tag asset tmpdir
@@ -169,6 +171,7 @@ install_mihomo() {
     mkdir -p "$(dirname "$MIHOMO_BIN")"
     install -m 0755 "$tmpdir/mihomo" "$MIHOMO_BIN"
     rm -rf "$tmpdir"
+    MIHOMO_INSTALLED=1   # 本工具安装，卸载时可删
     ok "已安装 $($MIHOMO_BIN -v | head -1 | cut -d' ' -f1-3)"
 }
 
@@ -226,18 +229,16 @@ install_geodata() {
             warn "  可手动从其他机器拷贝到 $MIHOMO_CONF_DIR/ 后重启服务"
         fi
     done
-    # metacubexd 管理面板（external-ui）
+    # metacubexd 管理面板（external-ui，仅面板功能，失败不阻断安装）
     if [ ! -d "$MIHOMO_CONF_DIR/ui" ] || [ -z "$(ls -A "$MIHOMO_CONF_DIR/ui" 2>/dev/null)" ]; then
-        local tmpdir=$(mktemp -d)
+        local tmpdir; tmpdir=$(mktemp -d)
+        mkdir -p "$MIHOMO_CONF_DIR/ui"
         info "下载 metacubexd 管理面板..."
         if dl "https://github.com/MetaCubeX/metacubexd/releases/latest/download/compressed-dist.tgz" \
-            "$tmpdir/dist.tgz"; then
-            mkdir -p "$MIHOMO_CONF_DIR/ui"
-            tar -xzf "$tmpdir/dist.tgz" -C "$MIHOMO_CONF_DIR/ui"
+            "$tmpdir/dist.tgz" && tar -xzf "$tmpdir/dist.tgz" -C "$MIHOMO_CONF_DIR/ui" 2>/dev/null; then
             ok "管理面板已就位（http://127.0.0.1:$API_PORT/ui/）"
         else
-            warn "metacubexd 下载失败（不影响核心功能，仅管理面板不可用）"
-            mkdir -p "$MIHOMO_CONF_DIR/ui"
+            warn "metacubexd 下载/解压失败（不影响核心功能，仅管理面板不可用）"
         fi
         rm -rf "$tmpdir"
     fi

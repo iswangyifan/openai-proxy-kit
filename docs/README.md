@@ -116,6 +116,16 @@ ASSUME_YES=1 SUB_URL="https://..." SHADOW=1 ./install.sh
 - 熔断器的能力边界：它验证"页面可达"，探不出节点出口 IP 被 OpenAI 登录风控
   拒绝（Cloudflare 403 地区限制）。此时在管理面板手动切换组内其他节点
 
+## 测试
+
+```bash
+bash tests/run_tests.sh
+```
+
+自包含单元测试（合成订阅数据、不联网、不写真实系统状态）：配置生成的
+probe 排序约定/筛选/报错/清洗/截断、桌面注入三态（注入/幂等/还原）。
+完整的影子安装冒烟见上文"影子验证"。
+
 ## 常见问题
 
 见 [troubleshooting.md](troubleshooting.md)——收录实战踩过的坑：FlClash 端口
