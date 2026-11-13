@@ -1,5 +1,6 @@
 """低误报的源码/历史凭据门禁；只打印位置，不回显匹配值。"""
 import re
+import json
 import subprocess
 from pathlib import Path
 
@@ -21,6 +22,15 @@ for name in filter(None, files):
         for line, text in enumerate(data.splitlines(), 1):
             if any(p.search(text) for p in PATTERNS):
                 failures.append(f'{name}:{line}: sensitive pattern')
+manifest = ROOT / 'third_party/mihomo-licenses/manifest.json'
+if manifest.exists():
+    inventory = json.loads(manifest.read_text())
+    published = set(files)
+    for module in inventory['modules']:
+        for license in module['licenses']:
+            path = 'third_party/mihomo-licenses/' + license['path']
+            if path not in published:
+                failures.append(path + ': license is ignored or missing from release inputs')
 # 检查拟发布的分支/tag历史；本地 AI 工具 notes 不属于发布内容。
 objects = subprocess.check_output(['git', 'rev-list', '--objects', '--branches', '--tags', 'HEAD'], cwd=ROOT).decode().splitlines()
 for entry in objects:

@@ -7,11 +7,11 @@ __pycache__/
 providers/
 *.log
 *.json.tmp
-.build-cache/
-.build-tools/
-build/
-dist/
-.artifacts/
+/.build-cache/
+/.build-tools/
+/build/
+/dist/
+/.artifacts/
 config.yaml*
 *.pre-auth
 *.removed-*
