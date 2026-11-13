@@ -39,7 +39,7 @@ def fetch():
         with tempfile.TemporaryDirectory(dir=cache) as temporary:
             archive = Path(temporary) / 'core.gz'
             subprocess.run(['curl', '--fail', '--location', '--proto', '=https', '--proto-redir', '=https',
-                            '--retry', '2', '--max-time', '180', asset['url'], '-o', str(archive)], check=True)
+                            '--retry', '3', '--retry-all-errors', '--retry-delay', '1', '--max-time', '180', asset['url'], '-o', str(archive)], check=True)
             if digest(archive) != asset['archive_sha256']:
                 raise ValueError('核心下载校验失败，拒绝解压或执行')
             candidate = Path(temporary) / 'mihomo'

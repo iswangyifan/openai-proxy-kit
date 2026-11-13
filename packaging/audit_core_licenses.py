@@ -56,7 +56,7 @@ def download(url, destination):
     destination.parent.mkdir(parents=True, exist_ok=True)
     if not destination.exists():
         partial = destination.with_name(destination.name + '.part')
-        subprocess.run(['curl', '-fsSL', '--proto', '=https', '--proto-redir', '=https', '--retry', '2',
+        subprocess.run(['curl', '-fsSL', '--proto', '=https', '--proto-redir', '=https', '--retry', '3', '--retry-all-errors', '--retry-delay', '1',
                         '--max-time', '120', url, '-o', str(partial)], check=True)
         os.replace(partial, destination)
 
