@@ -13,11 +13,11 @@
 # 影子验证（不动现网、不碰 gsettings、不写真实应用目录）:
 #   INSTALL_HOME=~/.local/share/openai-proxy-kit-test \
 #   MIHOMO_CONF_DIR=$HOME/.config/mihomo-kit-shadow \
-#   MIXED_PORT=17890 API_PORT=19090 DNS_PORT=1153 SHADOW=1 ./install.sh
+#   MIXED_PORT=17890 API_PORT=19090 DNS_PORT=1153 PROBE_PORT_BASE=27900 SHADOW=1 ./install.sh
 #
 # 环境变量可覆盖全部默认值（端口/路径/组名/上游版本等）
 
-set -euo pipefail
+set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/common.sh
@@ -36,17 +36,21 @@ OPENAI_FILTER="${OPENAI_FILTER:-}"
 MAX_NODES="${MAX_NODES:-60}"
 
 INSTALL_HOME="${INSTALL_HOME:-$HOME/.local/share/openai-proxy-kit}"
-MIHOMO_CONF_DIR="${MIHOMO_CONF_DIR:-$HOME/.config/mihomo}"
-MIHOMO_BIN="${MIHOMO_BIN:-$HOME/.local/bin/mihomo}"
+MIHOMO_CONF_DIR="${MIHOMO_CONF_DIR:-$HOME/.config/openai-proxy-kit/mihomo}"
+if [ -x "$SCRIPT_DIR/libexec/mihomo" ]; then
+    MIHOMO_BIN="${MIHOMO_BIN:-$SCRIPT_DIR/libexec/mihomo}"
+else
+    MIHOMO_BIN="${MIHOMO_BIN:-$HOME/.local/bin/mihomo}"
+fi
 SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
 USER_APPS_DIR="$HOME/.local/share/applications"
 GUARD_BIN="$HOME/.local/bin/guard-system-proxy-kit.sh"
 KIT_ENV="${KIT_ENV:-$INSTALL_HOME/kit.env}"
 
-UPSTREAM_REPO="${UPSTREAM_REPO:-https://github.com/tianwdong/openai-route-controller}"
-UPSTREAM_REF="${UPSTREAM_REF:-main}"
-CONTROLLER_DIR="$INSTALL_HOME/openai-route-controller"
+CONTROLLER_BIN="${CONTROLLER_BIN:-$SCRIPT_DIR/libexec/openai-route-controller}"
 CONTROLLER_ENV="$INSTALL_HOME/controller.env"
+MIHOMO_SECRET="${MIHOMO_SECRET:-}"
+MIHOMO_INSTALLED="${MIHOMO_INSTALLED:-0}"
 
 # unit 名固定带 -kit 后缀，避免与用户已有手工部署的裸名 unit 冲突
 UNIT_MIHOMO="mihomo-kit.service"
@@ -71,30 +75,11 @@ if [ "$SHADOW" = "1" ]; then
 fi
 
 write_kit_env() {
-    mkdir -p "$INSTALL_HOME"
-    # 注意: 值统一用单引号包裹（OPENAI_GROUP 等含空格/中文，裸值会导致 source 时被当命令执行）
-    cat > "$KIT_ENV" <<EOF
-# openai-proxy-kit 安装状态（install.sh 生成，diagnose/uninstall/update 读取）
-INSTALL_HOME='$INSTALL_HOME'
-MIXED_PORT='$MIXED_PORT'
-API_PORT='$API_PORT'
-DNS_PORT='$DNS_PORT'
-PROBE_PORT_BASE='$PROBE_PORT_BASE'
-OPENAI_GROUP='$OPENAI_GROUP'
-MIHOMO_CONF_DIR='$MIHOMO_CONF_DIR'
-MIHOMO_BIN='$MIHOMO_BIN'
-SUB_URL='$SUB_URL'
-SHADOW='$SHADOW'
-GUARD_LOG='$INSTALL_HOME/proxy-guard.log'
-UNIT_MIHOMO='$UNIT_MIHOMO'
-UNIT_CONTROLLER='$UNIT_CONTROLLER'
-UNIT_GUARD_SERVICE='$UNIT_GUARD_SERVICE'
-UNIT_GUARD_TIMER='$UNIT_GUARD_TIMER'
-NODE_BIN='${NODE_BIN:-}'
-MIHOMO_INSTALLED='${MIHOMO_INSTALLED:-0}'
-CONTROLLER_DIR='$CONTROLLER_DIR'
-CONTROLLER_ENV='$CONTROLLER_ENV'
-EOF
+    GUARD_LOG="${GUARD_LOG:-$INSTALL_HOME/proxy-guard.log}"
+    export INSTALL_HOME MIXED_PORT API_PORT DNS_PORT PROBE_PORT_BASE OPENAI_GROUP OPENAI_FILTER MAX_NODES
+    export MIHOMO_CONF_DIR MIHOMO_BIN MIHOMO_SECRET SUB_URL SHADOW GUARD_LOG UNIT_MIHOMO UNIT_CONTROLLER
+    export UNIT_GUARD_SERVICE UNIT_GUARD_TIMER MIHOMO_INSTALLED CONTROLLER_BIN CONTROLLER_ENV
+    python3 "$SCRIPT_DIR/scripts/kit_state.py" write "$KIT_ENV"
 }
 
 # ============================================================
@@ -122,6 +107,9 @@ check_env() {
         die "检测到 Clash Verge 正在运行。请先完全退出再安装（端口冲突）"
     fi
 
+    if [ "$SHADOW" != 1 ] && [ "$PROBE_PORT_BASE" != 17900 ]; then
+        die "当前 controller 的探测端口固定从 17900 开始；普通安装请保留默认值"
+    fi
     # 端口占用检测
     local p
     for p in "$MIXED_PORT" "$API_PORT" "$DNS_PORT"; do
@@ -154,27 +142,12 @@ install_mihomo() {
         MIHOMO_INSTALLED=0   # 复用已有二进制（可能是用户其他部署的），卸载时不删
         return
     fi
-    local arch tag asset tmpdir
-    case "$(uname -m)" in
-        x86_64) arch=amd64 ;;
-        aarch64|arm64) arch=arm64 ;;
-        *) die "不支持的架构: $(uname -m)" ;;
-    esac
-    info "获取 mihomo 最新版本号..."
-    tag=$(curl -fsSL --connect-timeout 10 --max-time 30 -o /dev/null -w '%{url_effective}' \
-        https://github.com/MetaCubeX/mihomo/releases/latest | grep -oE 'v[0-9.]+') || tag=""
-    [ -n "$tag" ] || tag="v1.19.33"
-    asset="mihomo-linux-${arch}-${tag}.gz"
-    tmpdir=$(mktemp -d)
-    info "下载 $asset ..."
-    dl "https://github.com/MetaCubeX/mihomo/releases/download/$tag/$asset" "$tmpdir/mihomo.gz" \
-        || die "mihomo 下载失败（可手动下载解压到 $MIHOMO_BIN 后重跑）"
-    gunzip -f "$tmpdir/mihomo.gz"
+    bash "$SCRIPT_DIR/packaging/fetch-core.sh" || die "固定核心下载或校验失败"
     mkdir -p "$(dirname "$MIHOMO_BIN")"
-    install -m 0755 "$tmpdir/mihomo" "$MIHOMO_BIN"
-    rm -rf "$tmpdir"
-    MIHOMO_INSTALLED=1   # 本工具安装，卸载时可删
-    ok "已安装 $($MIHOMO_BIN -v | head -1 | cut -d' ' -f1-3)"
+    install -m 0755 "$SCRIPT_DIR/.build-cache/core/mihomo" "$MIHOMO_BIN"
+    MIHOMO_INSTALLED=1
+    ok "已安装通过固定摘要验证的 mihomo"
+
 }
 
 # ============================================================
@@ -192,8 +165,7 @@ gen_mihomo_config() {
     [ -n "$OPENAI_FILTER" ] && extra+=(--openai-filter "$OPENAI_FILTER")
 
     local out_tmp="$MIHOMO_CONF_DIR/config.yaml.new"
-    python3 "$SCRIPT_DIR/scripts/gen_config.py" \
-        --sub-url "$SUB_URL" \
+    SUB_URL="$SUB_URL" MIHOMO_SECRET="$MIHOMO_SECRET" python3 "$SCRIPT_DIR/scripts/gen_config.py" \
         --out "$out_tmp" \
         --mixed-port "$MIXED_PORT" --api-port "$API_PORT" --dns-port "$DNS_PORT" \
         --probe-port-base "$PROBE_PORT_BASE" --openai-group "$OPENAI_GROUP" \
@@ -207,6 +179,7 @@ gen_mihomo_config() {
         info "旧配置已备份为 config.yaml.kit-bak"
     fi
     mv "$out_tmp" "$MIHOMO_CONF_DIR/config.yaml"
+    chmod 600 "$MIHOMO_CONF_DIR/config.yaml"
     ok "配置已生成: $MIHOMO_CONF_DIR/config.yaml"
 }
 
@@ -214,36 +187,8 @@ gen_mihomo_config() {
 # 阶段 3: GeoIP 数据（须先于配置生成——mihomo -t 校验 GEOSITE 规则时需要）
 # ============================================================
 install_geodata() {
-    phase "阶段 3/9 GeoIP/GeoSite 数据"
-    local base="https://github.com/MetaCubeX/meta-rules-dat/releases/latest/download"
-    local f
-    for f in country.mmdb geosite.dat geoip.metadb; do
-        if [ -f "$MIHOMO_CONF_DIR/$f" ]; then
-            info "$f 已存在，跳过"
-            continue
-        fi
-        info "下载 $f ..."
-        if dl "$base/$f" "$MIHOMO_CONF_DIR/$f"; then
-            ok "$f 已就位"
-        else
-            rm -f "$MIHOMO_CONF_DIR/$f"
-            warn "$f 下载失败：mihomo 启动时会自行下载（国内网络可能卡住）。"
-            warn "  可手动从其他机器拷贝到 $MIHOMO_CONF_DIR/ 后重启服务"
-        fi
-    done
-    # metacubexd 管理面板（external-ui，仅面板功能，失败不阻断安装）
-    if [ ! -d "$MIHOMO_CONF_DIR/ui" ] || [ -z "$(ls -A "$MIHOMO_CONF_DIR/ui" 2>/dev/null)" ]; then
-        local tmpdir; tmpdir=$(mktemp -d)
-        mkdir -p "$MIHOMO_CONF_DIR/ui"
-        info "下载 metacubexd 管理面板..."
-        if dl "https://github.com/MetaCubeX/metacubexd/releases/latest/download/compressed-dist.tgz" \
-            "$tmpdir/dist.tgz" && tar -xzf "$tmpdir/dist.tgz" -C "$MIHOMO_CONF_DIR/ui" 2>/dev/null; then
-            ok "管理面板已就位（http://127.0.0.1:$API_PORT/ui/）"
-        else
-            warn "metacubexd 下载/解压失败（不影响核心功能，仅管理面板不可用）"
-        fi
-        rm -rf "$tmpdir"
-    fi
+    mkdir -p "$MIHOMO_CONF_DIR"
+    info "仅 OpenAI 域名分流，无需下载公共数据库或第三方网页面板"
 }
 
 # ============================================================
@@ -254,20 +199,13 @@ install_systemd_units() {
     mkdir -p "$SYSTEMD_USER_DIR"
     render_template "$SCRIPT_DIR/templates/mihomo.service.tmpl" \
         "$SYSTEMD_USER_DIR/$UNIT_MIHOMO" \
-        MIHOMO_BIN="$MIHOMO_BIN" MIHOMO_CONF_DIR="$MIHOMO_CONF_DIR"
+        MIHOMO_BIN="$MIHOMO_BIN" MIHOMO_CONF_DIR="$MIHOMO_CONF_DIR" \
+        PROXY_HELPER="$SCRIPT_DIR/scripts/system_proxy.py" KIT_ENV="$KIT_ENV"
     systemctl --user daemon-reload
     if command -v systemd-analyze >/dev/null 2>&1; then
         systemd-analyze verify "$SYSTEMD_USER_DIR/$UNIT_MIHOMO" 2>&1 | head -5 || true
     fi
-    if [ "$SHADOW" = "1" ]; then
-        ok "影子模式: $UNIT_MIHOMO 已渲染（不启动、不 enable）"
-    else
-        systemctl --user enable --now "$UNIT_MIHOMO"
-        sleep 1
-        systemctl --user is-active --quiet "$UNIT_MIHOMO" \
-            || die "$UNIT_MIHOMO 启动失败，查看: journalctl --user -u $UNIT_MIHOMO -n 30"
-        ok "$UNIT_MIHOMO 已启动"
-    fi
+    ok "$UNIT_MIHOMO 已配置（统一启停入口负责启动）"
 }
 
 # ============================================================
@@ -283,61 +221,55 @@ install_proxy_guard() {
         info "非 GNOME 环境: 跳过"
         return
     fi
-    render_template "$SCRIPT_DIR/templates/guard-system-proxy.sh.tmpl" "$GUARD_BIN" KIT_ENV="$KIT_ENV"
+    mkdir -p "$(dirname "$GUARD_BIN")"
+    render_template "$SCRIPT_DIR/templates/guard-system-proxy.sh.tmpl" "$GUARD_BIN" KIT_ENV="$KIT_ENV" PROXY_HELPER="$SCRIPT_DIR/scripts/system_proxy.py"
     chmod +x "$GUARD_BIN"
     render_template "$SCRIPT_DIR/templates/proxy-guard.service.tmpl" \
         "$SYSTEMD_USER_DIR/$UNIT_GUARD_SERVICE" \
-        GUARD_SCRIPT="$GUARD_BIN" KIT_ENV="$KIT_ENV"
+        GUARD_SCRIPT="$GUARD_BIN" KIT_ENV="$KIT_ENV" PROXY_HELPER="$SCRIPT_DIR/scripts/system_proxy.py"
     render_template "$SCRIPT_DIR/templates/proxy-guard.timer.tmpl" \
-        "$SYSTEMD_USER_DIR/$UNIT_GUARD_TIMER"
+        "$SYSTEMD_USER_DIR/$UNIT_GUARD_TIMER" UNIT_GUARD_SERVICE="$UNIT_GUARD_SERVICE"
     systemctl --user daemon-reload
-    systemctl --user enable --now "$UNIT_GUARD_TIMER"
-    # 立即执行一次，马上把系统代理指到 mihomo
-    systemctl --user start "$UNIT_GUARD_SERVICE"
-    ok "proxy-guard 已启用（每分钟守护系统代理开关）"
+    ok "proxy-guard 已配置（只清理失效代理，不接管其他代理设置）"
 }
 
 # ============================================================
 # 阶段 7: 上游路由熔断器
 # ============================================================
 install_controller() {
-    phase "阶段 7/9 openai-route-controller 路由熔断器"
-    local node_bin
-    node_bin=$(command -v node 2>/dev/null || true)
-    if [ -z "$node_bin" ] || [ "$(node_major)" -lt 22 ]; then
-        warn "需要 Node.js >= 22（当前: $(node -v 2>/dev/null || echo 未安装)）"
-        warn "跳过熔断器安装。装好 Node 后运行: ./install.sh controller"
+    phase "阶段 7/9 内置路由熔断器"
+    local was_active=0
+    systemctl --user is-active --quiet "$UNIT_CONTROLLER" && was_active=1 || true
+    if [ ! -x "$CONTROLLER_BIN" ]; then
+        warn "未找到内置 controller 二进制。建议安装独立 .deb 软件包。"
+        warn "源码开发可先运行 packaging/build-linux.sh 构建；不再克隆上游仓库或安装 Node 运行时。"
         return 1
     fi
+    mkdir -p "$INSTALL_HOME/controller" "$SYSTEMD_USER_DIR"
+    python3 "$SCRIPT_DIR/scripts/kit_state.py" controller "$CONTROLLER_ENV"
 
-    if [ ! -d "$CONTROLLER_DIR/.git" ]; then
-        mkdir -p "$INSTALL_HOME"
-        info "克隆上游 $UPSTREAM_REPO ($UPSTREAM_REF)..."
-        git clone --depth 1 -b "$UPSTREAM_REF" "$UPSTREAM_REPO" "$CONTROLLER_DIR" \
-            || die "上游克隆失败（网络?）。可手动 clone 到 $CONTROLLER_DIR 后重跑 ./install.sh controller"
-    else
-        info "上游已存在: $CONTROLLER_DIR"
-    fi
-
-    NODE_BIN="$node_bin"  # 记入 kit.env
-    render_template "$SCRIPT_DIR/templates/controller.env.tmpl" "$CONTROLLER_ENV" \
-        API_PORT="$API_PORT" MIXED_PORT="$MIXED_PORT" OPENAI_GROUP="$OPENAI_GROUP" \
-        INSTALL_HOME="$INSTALL_HOME"
-    mkdir -p "$INSTALL_HOME/controller"
 
     render_template "$SCRIPT_DIR/templates/openai-route-controller.service.tmpl" \
         "$SYSTEMD_USER_DIR/$UNIT_CONTROLLER" \
-        CONTROLLER_DIR="$CONTROLLER_DIR" CONTROLLER_ENV="$CONTROLLER_ENV" NODE_BIN="$node_bin"
+        CONTROLLER_BIN="$CONTROLLER_BIN" CONTROLLER_ENV="$CONTROLLER_ENV" UNIT_MIHOMO="$UNIT_MIHOMO"
     systemctl --user daemon-reload
 
     if [ "$SHADOW" = "1" ]; then
         ok "影子模式: $UNIT_CONTROLLER 已渲染（不启动）"
-    else
-        systemctl --user enable --now "$UNIT_CONTROLLER"
+    elif systemctl --user is-active --quiet "$UNIT_MIHOMO"; then
+        systemctl --user enable "$UNIT_CONTROLLER"
+        if [ "$was_active" = 1 ]; then
+            systemctl --user restart "$UNIT_CONTROLLER"
+        else
+            systemctl --user start "$UNIT_CONTROLLER"
+        fi
         sleep 2
         systemctl --user is-active --quiet "$UNIT_CONTROLLER" \
             || die "$UNIT_CONTROLLER 启动失败，查看: journalctl --user -u $UNIT_CONTROLLER -n 30"
         ok "$UNIT_CONTROLLER 已启动"
+    else
+        if [ "$was_active" = 1 ]; then systemctl --user stop "$UNIT_CONTROLLER"; fi
+        ok "内置 controller 已配置；核心未开启，保持停止状态"
     fi
     return 0
 }
@@ -351,6 +283,7 @@ install_desktop_inject() {
         info "影子模式: 跳过（避免写真实应用目录）"
         return
     fi
+    [ "${DESKTOP_INJECT:-0}" = 1 ] || { info "未授权启动器适配，跳过；可单独运行 desktop 子命令"; return; }
     info "背景: VSCode 的 Codex 插件、ChatGPT 桌面版等不读系统代理、只认环境变量"
     local candidates=()
     local sys_apps="/usr/share/applications"
@@ -390,15 +323,26 @@ install_gui() {
         info "影子模式: 跳过（不写真实应用目录）"
         return
     fi
+    if [ -f "$SCRIPT_DIR/packaged" ]; then
+        GUI_INSTALLED=1
+        ok "独立软件包已提供桌面控制台与托盘入口"
+        return
+    fi
     if ! python3 -c "import gi; gi.require_version('Gtk','4.0'); gi.require_version('Adw','1')" 2>/dev/null; then
         warn "缺少 GTK4/libadwaita（python3-gi），跳过 GUI。补装: sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adwaita-1"
         warn "之后运行 ./install.sh gui 补装。CLI 一键开关不受影响: ./install.sh start|stop|status"
         return
     fi
-    mkdir -p "$INSTALL_HOME/scripts"
-    cp "$SCRIPT_DIR/scripts/common.sh" "$SCRIPT_DIR/scripts/switch.sh" \
-       "$SCRIPT_DIR/scripts/inject_desktop.py" "$SCRIPT_DIR/scripts/gui.py" \
-       "$INSTALL_HOME/scripts/"
+    mkdir -p "$USER_APPS_DIR"
+    mkdir -p "$INSTALL_HOME/scripts" "$INSTALL_HOME/templates"
+    if [ "$SCRIPT_DIR" != "$INSTALL_HOME" ]; then
+        cp "$SCRIPT_DIR/scripts/"*.py "$SCRIPT_DIR/scripts/"*.sh "$INSTALL_HOME/scripts/"
+        cp "$SCRIPT_DIR/install.sh" "$SCRIPT_DIR/uninstall.sh" "$INSTALL_HOME/"
+        cp "$SCRIPT_DIR/templates/"* "$INSTALL_HOME/templates/"
+    fi
+    mkdir -p "$INSTALL_HOME/assets" "$INSTALL_HOME/templates"
+    cp -R "$SCRIPT_DIR/assets/." "$INSTALL_HOME/assets/"
+    cp "$SCRIPT_DIR/diagnose.sh" "$INSTALL_HOME/diagnose.sh"
     render_template "$SCRIPT_DIR/templates/openai-proxy-kit-console.desktop.tmpl" \
         "$USER_APPS_DIR/openai-proxy-kit-console.desktop" \
         INSTALL_HOME="$INSTALL_HOME"
@@ -417,6 +361,7 @@ smoke_test() {
         info "影子模式: 手动拉起 mihomo 做冒烟（结束即杀）"
         "$MIHOMO_BIN" -d "$MIHOMO_CONF_DIR" >/dev/null 2>&1 &
         shadow_pid=$!
+        trap 'kill "$shadow_pid" 2>/dev/null || true; wait "$shadow_pid" 2>/dev/null || true' EXIT
         sleep 2
         kill -0 "$shadow_pid" 2>/dev/null || die "影子 mihomo 启动即退出（配置问题?）"
     else
@@ -430,7 +375,7 @@ smoke_test() {
     if port_in_use "$API_PORT"; then ok "API 端口 $API_PORT 监听中"; else err "API 端口 $API_PORT 未监听"; fail=1; fi
     # 3. OpenAI 组存在且候选非空
     local group_json
-    group_json=$(curl -s --max-time 5 \
+    group_json=$(api_curl -fsS --noproxy '*' --max-time 5 \
         "http://127.0.0.1:$API_PORT/proxies/$(python3 -c 'import sys,urllib.parse; print(urllib.parse.quote(sys.argv[1]))' "$OPENAI_GROUP")") || group_json=""
     if echo "$group_json" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d.get('all')" 2>/dev/null; then
         ok "OpenAI 组就绪: 当前选中 $(echo "$group_json" | python3 -c "import json,sys; print(json.load(sys.stdin)['now'])")"
@@ -452,7 +397,7 @@ smoke_test() {
         warn "probe 端口 $PROBE_PORT_BASE 未监听（listeners 未生效?）"
     fi
     # 6. controller 影子联调（部分验证: API 读取 + 组识别，probe 受端口约束可能不可用）
-    if [ "$SHADOW" = "1" ] && [ -f "$CONTROLLER_DIR/controller.mjs" ] && [ "$(node_major)" -ge 22 ]; then
+    if [ "$SHADOW" = "1" ] && [ -x "$CONTROLLER_BIN" ]; then
         info "controller 影子联调 (--once --shadow，只读不改选择)..."
         local shadow_state
         shadow_state=$(mktemp -d)
@@ -460,7 +405,7 @@ smoke_test() {
            MIHOMO_PROXY="http://127.0.0.1:$MIXED_PORT" \
            OPENAI_GROUP="$OPENAI_GROUP" \
            STATE_PATH="$shadow_state/state.json" \
-           timeout 60 node "$CONTROLLER_DIR/controller.mjs" --once --shadow 2>&1 | tail -3; then
+           timeout 60 "$CONTROLLER_BIN" --once --shadow 2>&1 | tail -3; then
             ok "controller 影子联调完成（详见上方输出）"
         else
             warn "controller 影子联调异常（详见上方输出）"
@@ -470,6 +415,8 @@ smoke_test() {
 
     if [ -n "$shadow_pid" ]; then
         kill "$shadow_pid" 2>/dev/null || true
+        wait "$shadow_pid" 2>/dev/null || true
+        trap - EXIT
         wait "$shadow_pid" 2>/dev/null || true
         info "影子 mihomo 已停止"
     fi
@@ -509,60 +456,101 @@ main() {
     case "$ACTION" in
         install)
             [ -f "$KIT_ENV" ] && warn "检测到已有安装状态（$KIT_ENV），将按当前变量覆盖式重装"
+            lock_kit
+            MIHOMO_SECRET="${MIHOMO_SECRET:-$(python3 -c 'import secrets; print(secrets.token_hex(32))')}"
             check_env
             install_mihomo
             install_geodata
             gen_mihomo_config
+            write_kit_env
+            trap 'code=$?; trap - EXIT; if [ "$code" != 0 ] && [ "$SHADOW" != 1 ]; then bash "$SCRIPT_DIR/scripts/switch.sh" stop || true; fi' EXIT
+            trap 'exit 143' TERM
+            trap 'exit 130' INT
             install_systemd_units
             install_proxy_guard
-            write_kit_env   # controller 需要 kit.env 先落盘（NODE_BIN 后补写）
             install_controller || true
-            write_kit_env   # 覆盖写入（含 NODE_BIN）
+            write_kit_env
             install_desktop_inject
             install_gui
+            if [ "$SHADOW" != 1 ]; then
+                bash "$SCRIPT_DIR/scripts/switch.sh" start
+            fi
             smoke_test
             print_summary
+            trap - EXIT TERM INT
             ;;
         update)
             [ -f "$KIT_ENV" ] || die "未安装（找不到 $KIT_ENV）"
             # shellcheck disable=SC1090
-            . "$KIT_ENV"
+            lock_kit
+            load_kit_env || die "安装状态无效，请重新配置"
             [ -n "$SUB_URL" ] || die "kit.env 缺少 SUB_URL"
-            info "重拉订阅重新生成配置..."
-            python3 "$SCRIPT_DIR/scripts/gen_config.py" \
-                --sub-url "$SUB_URL" --out "$MIHOMO_CONF_DIR/config.yaml.new" \
-                --mixed-port "$MIXED_PORT" --api-port "$API_PORT" --dns-port "$DNS_PORT" \
-                --probe-port-base "$PROBE_PORT_BASE" --openai-group "$OPENAI_GROUP" \
-                --max-nodes "${MAX_NODES:-60}" --mihomo-bin "$MIHOMO_BIN" \
-                --mihomo-conf-dir "$MIHOMO_CONF_DIR" \
-                || die "更新失败"
-            mv "$MIHOMO_CONF_DIR/config.yaml.new" "$MIHOMO_CONF_DIR/config.yaml"
-            if [ "$SHADOW" != "1" ]; then
-                systemctl --user restart "$UNIT_MIHOMO"
-                ok "mihomo 已重启"
+            local was_running=0
+            systemctl --user is-active --quiet "$UNIT_MIHOMO" && was_running=1 || true
+            [ -n "$MIHOMO_SECRET" ] || MIHOMO_SECRET=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
+            gen_mihomo_config
+            write_kit_env
+            install_controller
+            if [ "$SHADOW" != "1" ] && [ "$was_running" = 1 ]; then
+                if ! systemctl --user restart "$UNIT_MIHOMO"; then
+                    cp "$MIHOMO_CONF_DIR/config.yaml.kit-bak" "$MIHOMO_CONF_DIR/config.yaml"
+                    systemctl --user restart "$UNIT_MIHOMO" || true
+                    die "更新失败，已恢复旧配置"
+                fi
             fi
             ok "订阅更新完成"
             ;;
         controller)
             [ -f "$KIT_ENV" ] || die "未安装（先跑完整 install）"
             # shellcheck disable=SC1090
-            . "$KIT_ENV"
+            lock_kit
+            load_kit_env || die "安装状态无效，请重新配置"
+            if [ -x "$SCRIPT_DIR/libexec/openai-route-controller" ]; then
+                CONTROLLER_BIN="$SCRIPT_DIR/libexec/openai-route-controller"
+            fi
+            if [ -x "$SCRIPT_DIR/libexec/mihomo" ]; then
+                MIHOMO_BIN="$SCRIPT_DIR/libexec/mihomo"
+                MIHOMO_INSTALLED=0
+            fi
+            local was_running=0 migrating=0
+            systemctl --user is-active --quiet "$UNIT_MIHOMO" && was_running=1 || true
+            if [ -z "$MIHOMO_SECRET" ]; then
+                migrating=1
+                MIHOMO_SECRET=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
+                export MIHOMO_SECRET
+                python3 "$SCRIPT_DIR/scripts/secure_config.py" "$MIHOMO_CONF_DIR/config.yaml"
+            fi
+            write_kit_env
+            IS_GNOME=0; is_gnome && IS_GNOME=1 || true
+            if [ "$IS_GNOME" = 1 ]; then python3 "$SCRIPT_DIR/scripts/system_proxy.py" adopt --state "$KIT_ENV"; fi
+            install_systemd_units
+            install_proxy_guard
             install_controller || die "controller 安装失败"
+            if [ "$was_running" = 1 ]; then
+                systemctl --user restart "$UNIT_MIHOMO"
+            fi
+
             ;;
         desktop)
             [ -f "$KIT_ENV" ] || die "未安装（先跑完整 install）"
             # shellcheck disable=SC1090
-            . "$KIT_ENV"
-            IS_GNOME=1 SHADOW=0 install_desktop_inject
+            lock_kit
+            load_kit_env || die "安装状态无效，请重新配置"
+            DESKTOP_INJECT=1 IS_GNOME=1 SHADOW=0 install_desktop_inject
             ;;
         gui)
             [ -f "$KIT_ENV" ] || die "未安装（先跑完整 install）"
             # shellcheck disable=SC1090
-            . "$KIT_ENV"
+            lock_kit
+            load_kit_env || die "安装状态无效，请重新配置"
             SHADOW=0 install_gui
             ;;
         start|stop|status)
-            exec "$SCRIPT_DIR/scripts/switch.sh" "$ACTION"
+            exec bash "$SCRIPT_DIR/scripts/switch.sh" "$ACTION"
+            ;;
+        logs)
+            shift
+            exec /usr/bin/python3 "$SCRIPT_DIR/scripts/runtime.py" "$@"
             ;;
         *)
             die "未知子命令: $ACTION（可用: install/update/controller/desktop/gui/start/stop/status）"

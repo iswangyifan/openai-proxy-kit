@@ -15,20 +15,23 @@ KIT_ROOT="$(dirname "$SCRIPT_DIR")"
 GEN="$KIT_ROOT/scripts/gen_config.py"
 INJ="$KIT_ROOT/scripts/inject_desktop.py"
 
-WORK=$(mktemp -d /tmp/kit-tests.XXXXXX)
+TEST_TMP_ROOT="${TMPDIR:-$KIT_ROOT/.artifacts/tmp}"
+mkdir -p "$TEST_TMP_ROOT"
+WORK=$(mktemp -d "$TEST_TMP_ROOT/kit-tests.XXXXXX") || exit 1
 trap 'rm -rf "$WORK"' EXIT
 
 PASS=0; FAILED=0
 ok_()   { printf '  [PASS] %s\n' "$*"; PASS=$((PASS+1)); }
 fail_() { printf '  [FAIL] %s\n' "$*"; FAILED=$((FAILED+1)); }
 
-MIHOMO_BIN="$(command -v mihomo || true)"
+MIHOMO_BIN="${MIHOMO_TEST_BIN:-$(command -v mihomo || true)}"
 [ -z "$MIHOMO_BIN" ] && [ -x "$HOME/.local/bin/mihomo" ] && MIHOMO_BIN="$HOME/.local/bin/mihomo"
 
 # geodata 从现用配置目录借（只读，供 -t 校验与 T6 免网络下载）；无则降级
 GEODIR="$WORK/geodir"; mkdir -p "$GEODIR/ui"
 for f in geosite.dat geoip.metadb country.mmdb; do
-    [ -f "$HOME/.config/mihomo/$f" ] && cp "$HOME/.config/mihomo/$f" "$GEODIR/" 2>/dev/null
+    [ -f "${MIHOMO_TEST_DATA_DIR:-$HOME/.config/mihomo}/$f" ] && \
+        cp "${MIHOMO_TEST_DATA_DIR:-$HOME/.config/mihomo}/$f" "$GEODIR/" 2>/dev/null
 done
 echo placeholder > "$GEODIR/ui/.keep"   # 哑文件让 T6 跳过面板下载
 if [ ! -f "$GEODIR/geosite.dat" ]; then
@@ -81,7 +84,7 @@ assert sorted(group["proxies"]) == names
 assert [l["proxy"] for l in c["listeners"]] == names, "probe 排序与约定不一致"
 assert [l["port"] for l in c["listeners"]] == [17900 + i for i in range(len(names))]
 assert c["rules"][0] == "DOMAIN-SUFFIX,openai.com,OpenAI 自动选择"
-assert c["rules"][-1] == "MATCH,漏网之鱼"
+assert c["rules"][-1] == "MATCH,DIRECT"
 PYEOF
 else
     fail_ "T1 生成失败"
@@ -132,10 +135,16 @@ fi
 # 注意1: 输出经文件中转再 grep —— install.sh 预期 exit 1，直接管道会被 pipefail 误判
 # 注意2: 用户机上正运行 FlClash/Clash Verge 时，install.sh 阶段 1 冲突检测会先行拦截，
 #        属环境不满足而非回归 → SKIP
-if pgrep -if 'flclash|clash-verge|verge-mihomo' >/dev/null 2>&1; then
-    printf '  [SKIP] T6 检测到 Clash 系软件运行中（install 环境检测会先行拦截），跳过\n'
-else
-    ( cd "$KIT_ROOT" && ASSUME_YES=1 SUB_URL= INSTALL_HOME="$WORK/t6home" \
+mkdir -p "$WORK/t6bin" "$WORK/t6home"
+for data in country.mmdb geosite.dat geoip.metadb; do touch "$GEODIR/$data"; done
+printf '#!/bin/sh\nexit 0\n' > "$WORK/t6bin/systemctl"
+printf '#!/bin/sh\nexit 1\n' > "$WORK/t6bin/pgrep"
+printf '#!/bin/sh\necho Linger=yes\n' > "$WORK/t6bin/loginctl"
+printf '#!/bin/sh\nexit 0\n' > "$WORK/t6bin/ss"
+printf '#!/bin/sh\necho test-mihomo\n' > "$WORK/t6bin/mihomo"
+chmod +x "$WORK/t6bin/"*
+    ( cd "$KIT_ROOT" && PATH="$WORK/t6bin:$PATH" HOME="$WORK/t6home" \
+         MIHOMO_BIN="$WORK/t6bin/mihomo" ASSUME_YES=1 SUB_URL= INSTALL_HOME="$WORK/t6home" \
          MIXED_PORT=17891 API_PORT=19091 DNS_PORT=1154 MIHOMO_CONF_DIR="$GEODIR" \
          bash install.sh > "$WORK/t6.out" 2>&1 )
     if grep -q '免交互模式必须' "$WORK/t6.out"; then
@@ -143,7 +152,6 @@ else
     else
         fail_ "T6 免交互拒绝消息未出现（输出: $(tail -1 "$WORK/t6.out" 2>/dev/null)）"
     fi
-fi
 
 echo "== inject_desktop.py =="
 DT="$WORK/desktop"; mkdir -p "$DT/apps" "$DT/backup"

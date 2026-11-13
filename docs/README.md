@@ -1,162 +1,73 @@
-# openai-proxy-kit
+# 安装、使用与开发
 
-Linux 上一站式 **ChatGPT / Codex 无感代理**部署工具：填一个机场订阅 URL，跑一次
-`install.sh`，后台全自动——不用再"挂梯子"。
+## 支持范围
 
-```bash
-git clone <本仓库>
-cd openai-proxy-kit
-SUB_URL="https://你的机场订阅" ./install.sh
-```
+Ubuntu 24.04 / GNOME / amd64，Python 3.12、GTK4 ≥4.10、libadwaita ≥1.4。其他发行版与桌面暂未验收。GNOME 托盘依赖 StatusNotifierItem 扩展；缺少托盘时窗口仍提供明确退出方式。
 
-## 它解决什么问题
+软件包内置 mihomo 和自带 Node 运行时的 controller；使用端不需要 Node、Git 或另一个源码仓库。系统 GTK/Python 等依赖由 apt 安装。
 
-在 Linux 上让 ChatGPT / Codex "像没被墙一样"使用，需要同时打通五层，任何一层
-缺失都会表现为"卡、慢、转圈、加载不出账号"：
+## 安装
 
-| 层 | 问题 | 本工具 |
-|---|---|---|
-| 代理核心 | 没有常驻代理，每次手动开 | mihomo systemd 用户服务，开机自启 |
-| 分流 | 全局代理会拖慢国内流量 | 规则分流：仅 OpenAI 系域名走代理，国内直连 |
-| 系统代理 | 应用退出时把 GNOME 代理开关关掉导致全断网 | proxy-guard 每分钟自动恢复 |
-| 应用注入 | **VSCode 的 Codex 插件、ChatGPT 桌面版不读系统代理、只认环境变量**（Rust/Electron 网络栈） | 桌面启动器自动注入 `http_proxy` |
-| 节点保活 | 机场节点失效要手动换 | 集成 [openai-route-controller](https://github.com/tianwdong/openai-route-controller)（MIT），每 20s 完整路径探测自动切换/回滚/隔离 |
-
-第 4 层是 Linux 上最隐蔽的坑：系统代理设置看着一切正常，但 Codex 插件每个请求
-都在直连等超时。诊断方法见 `./diagnose.sh --pid <插件进程号>`。
-
-## 与 openai-route-controller 的分工
-
-上游项目（MIT）只做"路由熔断"一个环节，且仅支持 macOS/Windows，前提是用户已
-装好 Clash Verge Rev 并手动合并扩展脚本。本项目补齐 Linux 全链路：
-
-```
-本工具:  mihomo 安装 → 订阅解析生成配置(含 OpenAI 动态分组+probe 监听)
-          → systemd 常驻 → 系统代理守护 → 桌面启动器注入 → 诊断
-上游组件: OpenAI 路由熔断（候选验真/自动切换/失败回滚/节点隔离）
-```
-
-上游在安装时自动 `git clone` 到 `~/.local/share/openai-proxy-kit/openai-route-controller/`，
-版权与来源声明见 [NOTICE](NOTICE)。
-
-## 架构
-
-```
-浏览器 ──────────┐                        ┌─> OpenAI 域名 ──> 「OpenAI 自动选择」组 ──> 机场节点
-                  ├─ GNOME 系统代理 ──> mihomo (7890)
-VSCode/Codex ────┤   (proxy-guard 守护)   │
-ChatGPT 桌面版 ──┘                        └─> 国内域名/IP ──> DIRECT 直连
-
-openai-route-controller ── mihomo API(9090) 控制组选择
-                          probe 端口(17900+) 逐节点完整路径验真
-```
-
-- 订阅凭据只存在于 `proxy-providers` 的 URL 引用中，生成的配置文件零凭据
-- probe 监听（17900 起）与上游 controller 的"候选名去重+字典序排序+端口偏移"
-  约定严格一致，由 `gen_config.py` 自动生成
-
-## 快速开始
-
-依赖：Linux + systemd 用户服务 + GNOME 桌面（非 GNOME 亦可，跳过守护/注入段）+
-python3 + python3-yaml；熔断器需 Node.js >= 22（缺失会跳过，可后补）。
+从 [GitHub Releases](https://github.com/iswangyifan/openai-proxy-kit/releases) 下载软件包和 SHA256SUMS，在下载所在目录执行：
 
 ```bash
-# 安装（交互式，会询问订阅 URL、要注入哪些桌面应用）
-SUB_URL="https://..." ./install.sh
-
-# 日常
-./diagnose.sh                     # 全链路诊断（PASS/FAIL 清单）
-./install.sh start                # 一键开启整条代理链路
-./install.sh stop                 # 一键关闭（公司内网/仓库恢复直连）
-./install.sh status               # 查看各层状态
-./install.sh update               # 机场节点变更后重新生成配置
-./install.sh desktop              # 补充注入桌面启动器
-./install.sh controller           # 补装路由熔断器（装好 Node 后）
-./install.sh gui                  # 补装桌面控制台（装好 GTK4 后）
-
-# 卸载（逐项确认，完整回滚）
-./uninstall.sh
+sha256sum --ignore-missing -c SHA256SUMS
+sudo apt install ./openai-proxy-kit_0.2.1_amd64.deb
+openai-proxy-kit
 ```
 
-管理面板：`http://127.0.0.1:9090/ui/`（metacubexd，可切组内节点）
+SHA256 检查完整性，不代表独立数字签名。路径必须指向实际下载文件；出现“不支持的文件”时先运行 `ls -l ./openai-proxy-kit_0.2.1_amd64.deb` 检查位置。
 
-### 桌面控制台（FlClash 风格 GUI）
+首次配置输入可信 Clash YAML 订阅，核对页面的系统改动和可选启动器适配后启动。GUI 默认不适配任何应用；开启可选适配时会显示候选应用并保留现有用户参数。服务启停同时启用/取消登录自启动，独立自启设置尚未实现。已开启意图会在核心重启时核验端口后恢复；遇到其他手动/PAC代理则保留其设置。
 
-安装后应用菜单出现「代理控制台」——一个 GTK4 + libadwaita 原生窗口（与系统设置
-同风格），不是网页：
-
-- **大电源开关**：一键启停整条代理链路（服务 + 系统代理 + 桌面注入）
-- 服务状态卡片（mihomo / 熔断器 / 守护 / 系统代理 / 桌面注入）
-- OpenAI 组节点列表：点击切换、批量延迟测试
-- 一键跳转 metacubexd 管理面板
-
-开关按钮背后的实现与 CLI 子命令 `./install.sh start|stop|status` 是同一份
-（`scripts/switch.sh`），GUI 只是壳。`start` 有防断网保护：mihomo 端口未就绪时
-不会把系统代理指过去（比如 FlClash 抢占 7890 的场景）。
-
-依赖 `python3-gi` + GTK4 + libadwaita（GNOME 桌面自带）。缺失时安装自动跳过
-GUI，补装依赖后运行 `./install.sh gui` 即可：
+## 使用与恢复
 
 ```bash
-sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adwaita-1
+openai-proxy-kit start
+openai-proxy-kit stop
+openai-proxy-kit status
+openai-proxy-kit --logs
+openai-proxy-kit logs --follow
+openai-proxy-kit diagnose
+openai-proxy-kit update
+openai-proxy-kit upgrade   # 旧配置迁移到随机 API 密钥与新守护
+openai-proxy-kit reset     # 恢复用户集成，保留私有配置和备份
 ```
 
-### 影子验证（不动现有代理环境）
+默认仅明确列出的 OpenAI 相关域名走代理，其余直连；不启用 TUN、不修改系统 DNS、不下载 GeoIP/GeoSite。内网登录、企业 DNS 和 VPN 兼容性仍取决于环境；需要时关闭代理。
 
-本机已有其他代理部署、想先验证本工具时：
+关闭会逐协议恢复接管前的设置，保留其他程序后续修改的目标；因此原先配置了其他代理时，恢复结果也可能是该代理。已经运行的应用环境变量不会被改写，需要完全退出后重开。
+
+新配置位于 `~/.config/openai-proxy-kit/mihomo/`；安装状态、系统代理快照和启动器备份位于 `~/.local/share/openai-proxy-kit/`。状态文件仅作数据解析，不能作为可执行 shell 脚本使用。软件包通过受保护的 UID 登记目录识别已配置账号；root 只验证文件归属并降权，实际状态由各用户读取。旧安装继续使用记录的路径，不递归删除共享 mihomo 目录。
+
+软件包升级后请完全退出并重开控制台。旧配置迁移前保留 `.pre-auth` 备份，升级后在当前用户会话执行 `openai-proxy-kit upgrade`。API 密钥无需手工复制给 GUI。可选网页面板需要自行安装并输入密钥；不要把密钥放在 URL 中分享。
+
+## 卸载
 
 ```bash
-INSTALL_HOME=~/.local/share/openai-proxy-kit-test \
-MIHOMO_CONF_DIR=$HOME/.config/mihomo-kit-shadow \
-MIXED_PORT=17890 API_PORT=19090 DNS_PORT=1153 \
-ASSUME_YES=1 SUB_URL="https://..." SHADOW=1 ./install.sh
+sudo apt remove openai-proxy-kit
 ```
 
-影子模式：配置目录/端口全部隔离，systemd unit 渲染为 `*-test` 名但不启动，
-跳过系统代理守护与桌面注入（唯二会写真实系统状态的动作）。
+正常包移除会在当前及其他已配置用户身份下清理服务、恢复代理和启动器。清理失败会阻止移除，先按提示恢复再重试，不能强制跳过脚本。apt upgrade 不执行移除清理。
 
-## 可配置项（环境变量）
+GUI 的“工具与设置 → 恢复用户集成”与 `reset` 使用同一清理逻辑。
 
-| 变量 | 默认 | 说明 |
-|---|---|---|
-| `SUB_URL` | 交互询问 | 机场订阅 URL（Clash yaml 格式，机场后台均提供） |
-| `MIXED_PORT` / `API_PORT` / `DNS_PORT` | 7890 / 9090 / 1053 | mihomo 端口 |
-| `PROBE_PORT_BASE` | 17900 | **必须 17900**（上游 controller 硬编码约定） |
-| `OPENAI_GROUP` | OpenAI 自动选择 | 组名 |
-| `OPENAI_FILTER` | 空（全部节点） | 正则，筛选进入 OpenAI 组的候选（如 `HY2|JP|KR|TW`） |
-| `MAX_NODES` | 60 | 节点数上限（防 probe 监听撑爆端口段） |
-| `INSTALL_HOME` | ~/.local/share/openai-proxy-kit | 安装目录 |
-| `MIHOMO_CONF_DIR` | ~/.config/mihomo | mihomo 配置目录 |
-| `UPSTREAM_REF` | main | 上游熔断器版本 |
+`reset` 和卸载保留订阅、节点配置及备份，状态归档为 `kit.env.removed-*`。如需删除敏感数据，先检查私有配置目录与备份，确认没有其他部署使用后自行删除；程序不会递归删除共享目录。自定义安装位置通过用户级位置记录定位；影子测试不登记为正常安装。
 
-## 风险声明
-
-- 仅对 5 条 OpenAI 系域名（openai.com / chatgpt.com / oaistatic.com /
-  oaiusercontent.com / cdn.auth0.com）做接管分流，不碰其他流量策略；国内域名
-  与 IP 全部直连
-- 订阅节点名是快照：机场改了节点名后 probe 引用会失效，运行 `./install.sh update`
-  重新生成即可（mihomo 对组内不存在的节点名会启动失败，update 是修复手段）
-- systemd 服务以 `*-kit` 后缀命名，与用户已有的手工部署（裸名 unit）可共存；
-  若要切换管理权，先停用旧 unit 再安装本工具
-- 熔断器的能力边界：它验证"页面可达"，探不出节点出口 IP 被 OpenAI 登录风控
-  拒绝（Cloudflare 403 地区限制）。此时在管理面板手动切换组内其他节点
-
-## 测试
+## 开发与构建
 
 ```bash
-bash tests/run_tests.sh
+sudo apt install python3 python3-gi python3-yaml gir1.2-gtk-4.0 gir1.2-adw-1 \
+  gir1.2-gdkpixbuf-2.0 librsvg2-common curl systemd iproute2 libglib2.0-bin \
+  util-linux dbus dconf-gsettings-backend dpkg-dev binutils xvfb
+# 安装 packaging/NODE-VERSION 指定的官方 Node（只在构建机器需要）
+bash packaging/fetch-core.sh
+bash tests/check.sh
+bash packaging/build-linux.sh
 ```
 
-自包含单元测试（合成订阅数据、不联网、不写真实系统状态）：配置生成的
-probe 排序约定/筛选/报错/清洗/截断、桌面注入全生命周期（注入/幂等/还原/
-disable/enable 启停循环）、switch.sh 未安装拒绝、gui.py headless 冒烟。
-完整的影子安装冒烟见上文"影子验证"。
+核心版本和可信摘要由 [core.lock.json](../packaging/core.lock.json) 固定；发行包仅接受锁定且已审核的核心；自定义版本须同步更新二进制摘要、准确源码包及源码摘要，不能覆盖一个路径就绕过门禁。首版只提供 amd64 锁定输入。构建总是执行 npm ci；不在安装阶段下载运行时或上游源码。
 
-## 常见问题
+产物位于 `dist/`。包内 CORE-ORIGIN.json 从实际入包文件生成；对应 GPL 核心及实际 Go 模块源码一并生成供发布；模块 ZIP 与二进制 buildinfo 中的 h1 校验一致。许可清单与全文随包提供。所有自动化测试均使用隔离状态、合成凭据或本地假 API，不访问真实账号。
 
-见 [troubleshooting.md](troubleshooting.md)——收录实战踩过的坑：FlClash 端口
-冲突、Codex 插件不读系统代理、登录 403 风控、订阅节点名变更等。
-
-## 许可证
-
-[MIT](LICENSE)。集成 [tianwdong/openai-route-controller](https://github.com/tianwdong/openai-route-controller)（MIT），见 [NOTICE](NOTICE)。
+发布步骤与验收边界见[发布流程](releasing.md)，隐私说明见[安全策略](../SECURITY.md)，许可见[NOTICE](../NOTICE)。

@@ -16,7 +16,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 KIT_ENV="${KIT_ENV:-$HOME/.local/share/openai-proxy-kit/kit.env}"
 if [ -f "$KIT_ENV" ]; then
     # shellcheck disable=SC1090
-    . "$KIT_ENV" 2>/dev/null || warn "kit.env 加载异常: $KIT_ENV"
+    load_kit_env || die "kit.env 加载异常"
 fi
 # 关键变量兜底（kit.env 缺失/损坏时仍可诊断默认端口）
 : "${MIXED_PORT:=7890}" "${API_PORT:=9090}" "${PROBE_PORT_BASE:=17900}"
@@ -71,7 +71,7 @@ fi
 # ---------- 3. API 与 OpenAI 组 ----------
 echo "── 3. mihomo API 与 OpenAI 组 ──"
 GROUP_ENC=$(python3 -c 'import sys,urllib.parse; print(urllib.parse.quote(sys.argv[1]))' "$OPENAI_GROUP" 2>/dev/null || echo "")
-if GROUP_JSON=$(curl -s --max-time 5 "http://127.0.0.1:$API_PORT/proxies/$GROUP_ENC" 2>/dev/null); then
+if GROUP_JSON=$(api_curl -fsS --noproxy '*' --max-time 5 "http://127.0.0.1:$API_PORT/proxies/$GROUP_ENC" 2>/dev/null); then
     NOW=$(echo "$GROUP_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('now','?'))" 2>/dev/null)
     CAND=$(echo "$GROUP_JSON" | python3 -c "import json,sys; print(len(json.load(sys.stdin).get('all') or []))" 2>/dev/null)
     pass "OpenAI 组「$OPENAI_GROUP」: 当前 $NOW / 候选 ${CAND:-0} 个"

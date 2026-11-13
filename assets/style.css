@@ -1,0 +1,47 @@
+window.opk { background: #f5f7fb; color: #273344; }
+.opk headerbar { background: #f5f7fb; box-shadow: none; border: none; }
+.opk .sidebar { background: #eaf0f6; border-right: 1px solid #dce3ec; padding: 22px 14px; }
+.brand { font-size: 16px; font-weight: 700; }
+.brand-note { color: #53647a; font-size: 11px; }
+.sidebar list { background: transparent; }
+.sidebar row { border-radius: 12px; padding: 12px; margin-bottom: 5px; }
+.sidebar row:selected { background: #d9e7f4; color: #12577b; }
+.sidebar row:hover { background: alpha(#8ea8bf, 0.13); }
+.sidebar .footer { font-size: 11px; color: #53647a; }
+.content { padding: 12px 28px 28px; }
+.page-title { font-size: 25px; font-weight: 700; }
+.page-subtitle { color: #53647a; font-size: 13px; }
+.surface { background: #edf2f8; border: 1px solid #dce4ee; border-radius: 22px; padding: 22px; }
+.hero { background: #e7f1fa; border-color: #cddfeb; padding: 28px; }
+.section-title { font-size: 14px; font-weight: 600; }
+.state-title { font-size: 30px; font-weight: 700; }
+.detail { color: #53647a; font-size: 13px; }
+.value { font-size: 18px; font-weight: 600; }
+.pill { border-radius: 10px; padding: 5px 10px; background: #dce6ef; color: #43566b; font-size: 12px; }
+.pill.success { background: #cceadd; color: #14513b; }
+.pill.warning { background: #fae5ba; color: #694500; }
+.pill.error { background: #f6d9db; color: #7c2430; }
+.power { background: #087da5; color: white; border-radius: 14px; padding: 12px 18px; font-weight: 600; }
+.power:hover { background: #076b91; }
+.power:disabled { opacity: 0.5; }
+.secondary { border-radius: 12px; padding: 9px 14px; }
+.notice { background: #fff1d5; color: #644a18; border-radius: 14px; padding: 12px 16px; }
+.nodes { background: transparent; }
+.nodes row { background: #edf2f8; border: 1px solid #dce4ee; border-radius: 15px; padding: 16px; margin-bottom: 8px; }
+.nodes row:selected { background: #deedf8; border-color: #78abc9; }
+.log-view { background: #172333; color: #dce7f3; border-radius: 15px; padding: 16px; font-size: 12px; }
+.log-toolbar { padding: 0 0 12px; }
+.opk button:focus-visible, .opk row:focus-visible { outline: 2px solid #087da5; outline-offset: 2px; }
+.opk.dark { background: #17212e; color: #e2eaf2; }
+.opk.dark headerbar { background: #17212e; }
+.dark .sidebar { background: #1c2939; border-color: #354359; }
+.dark .sidebar row:selected { background: #284762; color: #d2ebfb; }
+.dark .surface, .dark .nodes row { background: #202e40; border-color: #354359; }
+.dark .hero { background: #20394b; border-color: #35566c; }
+.dark .detail, .dark .page-subtitle, .dark .brand-note, .dark .sidebar .footer { color: #b0c0d2; }
+.dark .pill { background: #35465a; color: #d8e4f0; }
+.dark .pill.success { background: #235743; color: #c8efdd; }
+.dark .pill.warning { background: #604c25; color: #ffe4ab; }
+.dark .pill.error { background: #62343d; color: #ffdae0; }
+.dark .nodes row:selected { background: #284762; border-color: #72a5c7; }
+.dark .notice { background: #4d4029; color: #ffe3b0; }

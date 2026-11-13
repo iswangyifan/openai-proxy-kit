@@ -1,0 +1,16 @@
+[Desktop Entry]
+Type=Application
+Name=OpenAI Proxy Kit
+GenericName=代理控制台
+Comment=Codex / ChatGPT 代理启停、节点与实时日志
+Exec=openai-proxy-kit
+Icon=openai-proxy-kit
+Categories=Network;
+Keywords=proxy;clash;mihomo;openai;codex;
+StartupWMClass=io.github.opk.Console
+Terminal=false
+Actions=Logs;
+
+[Desktop Action Logs]
+Name=查看实时日志
+Exec=openai-proxy-kit --logs

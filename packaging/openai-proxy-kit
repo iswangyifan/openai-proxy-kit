@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+PREFIX="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+APP_DIR="${OPK_APP_DIR:-$PREFIX/lib/openai-proxy-kit}"
+case "${1:-gui}" in
+    start|stop|status) exec bash "$APP_DIR/scripts/switch.sh" "$1" ;;
+    reset) shift; exec /usr/bin/python3 "$APP_DIR/scripts/package_cleanup.py" "$@" ;;
+    configure) exec bash "$APP_DIR/install.sh" ;;
+    upgrade) exec bash "$APP_DIR/install.sh" controller ;;
+    update) exec bash "$APP_DIR/install.sh" update ;;
+    diagnose) shift; exec bash "$APP_DIR/diagnose.sh" "$@" ;;
+    logs) shift; exec /usr/bin/python3 "$APP_DIR/scripts/runtime.py" "$@" ;;
+    gui) [ "$#" -eq 0 ] || shift; exec /usr/bin/python3 "$APP_DIR/scripts/gui.py" "$@" ;;
+    *) exec /usr/bin/python3 "$APP_DIR/scripts/gui.py" "$@" ;;
+esac

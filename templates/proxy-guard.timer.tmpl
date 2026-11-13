@@ -4,7 +4,7 @@ Description=run proxy-guard every minute (openai-proxy-kit)
 [Timer]
 OnBootSec=30
 OnUnitActiveSec=60
-Unit=proxy-guard.service
+Unit=@UNIT_GUARD_SERVICE@
 
 [Install]
 WantedBy=timers.target

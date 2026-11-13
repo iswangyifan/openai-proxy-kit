@@ -1,0 +1,50 @@
+.TH OPENAI-PROXY-KIT 1 "2026-11" "openai-proxy-kit" "User Commands"
+.SH NAME
+openai-proxy-kit \- Linux tray proxy switch for OpenAI services
+.SH SYNOPSIS
+.B openai-proxy-kit
+.RI [ gui | start | stop | status | configure | upgrade | update | diagnose | reset | logs ]
+.SH DESCRIPTION
+A GTK4 console and tray switch. The package includes mihomo and a self-contained
+route controller. User configuration must run without sudo. Installation and
+package removal use the package manager.
+.SH COMMANDS
+.TP
+.B gui
+Open the console without enabling the proxy.
+.TP
+.B start
+Start user services, enable login startup, and apply the proxy.
+.TP
+.B stop
+Restore owned proxy settings and launchers, then stop user services and disable startup.
+.TP
+.B configure
+Configure a trusted Clash YAML subscription interactively.
+.TP
+.B upgrade
+Migrate existing configuration and use bundled runtime components.
+.TP
+.B update
+Refresh the subscription; keep stopped services stopped.
+.TP
+.B reset
+Restore user integration while retaining private configuration and backups.
+.TP
+.B diagnose
+Inspect service, port and network state.
+.TP
+.B logs --follow
+Follow redacted local logs. Review output before sharing it.
+.SH FILES
+.I ~/.local/share/openai-proxy-kit/
+contains private state, proxy snapshots and launcher backups.
+.I ~/.config/openai-proxy-kit/mihomo/
+contains generated node configuration for new installations.
+.SH SECURITY
+The management API uses a random secret and binds to loopback.
+The local proxy port is not a per-user access-control boundary.
+This independent project is not affiliated with or endorsed by OpenAI.
+.SH SEE ALSO
+Project documentation and private vulnerability reporting:
+https://github.com/iswangyifan/openai-proxy-kit

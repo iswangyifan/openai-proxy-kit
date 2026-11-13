@@ -1,0 +1,6 @@
+* text=auto eol=lf
+*.png binary
+# Preserve upstream bytes: license hashes are checked against verified sources.
+third_party/** -text -whitespace
+third_party/mihomo-licenses/manifest.json text eol=lf whitespace=trailing-space,space-before-tab
+packaging/*-LICENSE -text -whitespace

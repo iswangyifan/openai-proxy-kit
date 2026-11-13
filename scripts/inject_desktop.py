@@ -19,11 +19,13 @@
 """
 
 import argparse
+import hashlib
 import json
 import re
 import shutil
 import sys
 from pathlib import Path
+from kit_state import private_write
 
 MARKER = "# openai-proxy-kit injected"
 ENV_PREFIX_TMPL = (
@@ -46,8 +48,8 @@ def load_manifest(backup_dir: Path) -> dict:
 
 def save_manifest(backup_dir: Path, manifest: dict):
     backup_dir.mkdir(parents=True, exist_ok=True)
-    (backup_dir / "manifest.json").write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    private_write(backup_dir / "manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
+
 
 
 def is_injected(text: str) -> bool:
@@ -93,61 +95,62 @@ def do_inject(args, src: Path, proxy: str, user_apps: Path, backup_dir: Path, ma
 
     target, in_place = resolve_target(src, user_apps)
 
-    # 备份原文件（系统级备份源文件；用户级原地修改前也备份）
-    backup_dir.mkdir(parents=True, exist_ok=True)
-    backup_path = backup_dir / f"{src.name}.orig"
+    existing = manifest["injected"].get(str(target))
+    if existing and target.exists() and not is_injected(target.read_text(encoding='utf-8')):
+        backup = Path(existing['backup'])
+        if backup.exists() and target.read_bytes() != backup.read_bytes():
+            die(f"启动器已被用户修改，保留原文件，请重新选择适配：{target.name}")
+    original_exists = target.exists()
+    original = target if original_exists else src
+    text = original.read_text(encoding='utf-8')
+    backup_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    suffix = '.user.orig' if original_exists and not in_place else '.orig'
+    backup_path = backup_dir / f"{src.name}{suffix}"
     if not backup_path.exists():
-        shutil.copy2(src, backup_path)
-
+        shutil.copy2(original, backup_path)
+        backup_path.chmod(0o600)
     new_text = inject_text(text, proxy)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(new_text, encoding="utf-8")
-
+    private_write(target, new_text)
     manifest["injected"][str(target)] = {
-        "source": str(src),
-        "in_place": in_place,
-        "backup": str(backup_path),
+        "source": str(src), "in_place": in_place,
+        "restore_original": original_exists, "backup": str(backup_path),
+        "injected_sha256": hashlib.sha256(new_text.encode()).hexdigest(),
     }
     print(f"[inject_desktop] 已注入: {src.name} → {target}"
           f"{'（用户级覆盖）' if not in_place else '（原地，已备份）'}")
 
 
-def do_restore(user_apps: Path, backup_dir: Path, manifest: dict) -> int:
+def do_disable(user_apps: Path, backup_dir: Path, manifest: dict) -> int:
+    """只替换仍属于本工具且未被用户编辑的文件。"""
     count = 0
     for target, info in list(manifest["injected"].items()):
         t = Path(target)
+        b = Path(info["backup"])
+        restore = info.get('restore_original', info.get('in_place', False))
         if t.is_file():
-            t.unlink()
+            data = t.read_bytes()
+            if not is_injected(data.decode('utf-8')):
+                continue
+            digest = info.get('injected_sha256')
+            if digest and hashlib.sha256(data).hexdigest() != digest:
+                die(f"启动器注入后已被编辑，保留文件，请手动处理：{t.name}")
+            if restore:
+                if not b.is_file():
+                    die(f"启动器备份缺失，保留文件：{t.name}")
+                private_write(t, b.read_text(encoding='utf-8'))
+            else:
+                t.unlink()
             count += 1
-            print(f"[inject_desktop] 已移除注入: {t.name}")
-        # 原地修改的（如 ~/.local 下原生的 chatgpt.desktop）从备份恢复
-        if info.get("in_place"):
-            b = Path(info["backup"])
-            if b.is_file() and not t.exists():
-                shutil.copy2(b, t)
-                print(f"[inject_desktop] 已从备份恢复: {t.name}")
-    manifest["injected"] = {}
-    save_manifest(backup_dir, manifest)
-    print(f"[inject_desktop] 共处理 {count} 个文件（备份保留在 {backup_dir}）")
+        elif restore and b.is_file():
+            private_write(t, b.read_text(encoding='utf-8'))
+    print(f"[inject_desktop] 已停用 {count} 个启动器，用户原配置保留")
     return count
 
 
-def do_disable(user_apps: Path, backup_dir: Path, manifest: dict) -> int:
-    """临时停用注入（卸载代理开关用）: 删除注入版启动器，manifest 保留"""
-    count = 0
-    for target, info in list(manifest["injected"].items()):
-        t = Path(target)
-        # 只删除确认是注入版的文件，避免误删用户后续手动改过的
-        if t.is_file() and is_injected(t.read_text(encoding="utf-8")):
-            t.unlink()
-            count += 1
-            print(f"[inject_desktop] 已停用注入: {t.name}")
-        if info.get("in_place"):
-            b = Path(info["backup"])
-            if b.is_file() and not t.exists():
-                shutil.copy2(b, t)
-                print(f"[inject_desktop] 已恢复原版: {t.name}")
-    print(f"[inject_desktop] 停用完成（{count} 个，manifest 保留，enable 可恢复）")
+def do_restore(user_apps: Path, backup_dir: Path, manifest: dict) -> int:
+    count = do_disable(user_apps, backup_dir, manifest)
+    manifest["injected"] = {}
+    save_manifest(backup_dir, manifest)
     return count
 
 
@@ -159,7 +162,10 @@ def do_enable(args, user_apps: Path, backup_dir: Path, manifest: dict) -> int:
         if not src.is_file():
             print(f"[inject_desktop] 跳过（源文件已不存在）: {src}")
             continue
+        original_record = dict(info)
         do_inject(args, src, args.proxy, user_apps, backup_dir, manifest)
+        manifest['injected'][target]['restore_original'] = original_record.get('restore_original', original_record.get('in_place', False))
+        manifest['injected'][target]['backup'] = original_record['backup']
         count += 1
     print(f"[inject_desktop] 恢复完成（{count} 个）")
     return count

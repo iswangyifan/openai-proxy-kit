@@ -5,7 +5,9 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=@MIHOMO_BIN@ -d @MIHOMO_CONF_DIR@
+ExecStart="@MIHOMO_BIN@" -d "@MIHOMO_CONF_DIR@"
+ExecStartPost=/usr/bin/python3 "@PROXY_HELPER@" resume --state "@KIT_ENV@"
+ExecStopPost=/usr/bin/python3 "@PROXY_HELPER@" recover --state "@KIT_ENV@"
 Restart=on-failure
 RestartSec=3
 

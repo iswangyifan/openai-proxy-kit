@@ -1,24 +1,40 @@
 NOTICE — 第三方组件声明
 ======================
 
-本仓库在安装时自动从上游拉取并集成以下组件（不 vendor 进本仓库源码树）:
+openai-proxy-kit 的 Linux 发行包包含以下组件。用户无需克隆额外仓库或安装外部 Node.js。
 
 openai-route-controller
-  上游:   https://github.com/tianwdong/openai-route-controller
+  上游: https://github.com/tianwdong/openai-route-controller
+  固定提交: 75900e4f524e9a84722d3b0ab474da6df6dcef89
   许可证: MIT — Copyright (c) 2026 Tianwen Dong
-  用途:   OpenAI 路由熔断器（候选完整路径验真 / 自动切换 / 失败回滚 / 节点隔离）
-  集成方式: install.sh 执行 `git clone --depth 1` 到
-            ~/.local/share/openai-proxy-kit/openai-route-controller/
-            并通过 EnvironmentFile 传入本工具的端口/组名参数
-  选择原因: 自研熔断状态机会重复踩上游已解决的回滚/隔离/热备/退避问题
+  用途: OpenAI 路由探测、候选验证、故障切换、切换后复核、回滚及隔离
+  集成: third_party/route-controller 中保留构建输入与完整 MIT 文本；
+        构建时打包为自带运行时的 Node SEA 二进制，发行包不安装其源码目录。
+  完整许可证: third_party/route-controller/LICENSE；发行包内 CONTROLLER-LICENSE。
+
+Node.js
+  上游: https://nodejs.org/
+  用途: controller 内部运行时；使用端无需另行安装。
+  许可证: Node.js 与其包含的第三方库许可见 packaging/NODE-LICENSE（版本见 packaging/NODE-VERSION），
+          发行包随附相同文本。构建强制校验对应版本。
 
 mihomo
-  上游:   https://github.com/MetaCubeX/mihomo
-  许可证: GPL-3.0（本工具仅在安装时下载其官方 release 二进制，不分发其源码，
-          也不修改其代码；用户与 mihomo 之间的许可关系由其官方发布物决定）
-  用途:   代理核心（分流 / mixed 端口 / REST API）
+  上游: https://github.com/MetaCubeX/mihomo
+  许可证: GPL-3.0，完整文本见 packaging/MIHOMO-LICENSE。
+  集成: 下载官方 Linux 二进制，作为软件包内部核心提供。
+  对应源代码: https://github.com/MetaCubeX/mihomo
+  实际核心版本、源代码 tag 链接和构建文件校验值记录在随包 CORE-ORIGIN.json 中。
+  Release 下载旁提供对应核心和 Go 模块源码包与准确来源；获取源码不依赖安装 Node。
+  Go 运行时及实际链接模块的原始版权/许可保存在 third_party/mihomo-licenses；
+  发行包内 MIHOMO-DEPENDENCIES 保留这些全文与来自实际二进制 buildinfo 的清单。
+  模块源码 ZIP 按二进制记录的 Go h1 校验，不根据名称猜测授权。
 
-metacubexd
-  上游:   https://github.com/MetaCubeX/metacubexd
-  许可证: MIT
-  用途:   mihomo 管理面板静态资源（external-ui）
+地理数据库与网页面板
+  0.2.1 起默认仅 OpenAI 相关域名走代理，其余直连。
+  发行包不包含 meta-rules-dat、GeoLite2、metacubexd 或其图标，
+  安装和运行阶段不自动下载这些组件。
+  用户自行集成第三方数据或面板时，应另行核对相应许可。
+
+FlClash
+  上游: https://github.com/chen08209/FlClash
+  在本项目中作为桌面交互设计参考，未复制其实现或图标资源。

@@ -7,6 +7,9 @@ log-level: info
 unified-delay: true
 tcp-concurrent: true
 external-controller: 127.0.0.1:@API_PORT@
+external-controller-cors:
+  allow-origins: ["http://127.0.0.1:@API_PORT@"]
+  allow-private-network: false
 external-ui: ui
 external-ui-name: metacubexd
 profile:
@@ -43,10 +46,5 @@ sniffer:
     TLS:
       ports: [443, 8443]
 
-geo-auto-update: true
-geo-update-interval: 24
-geox-url:
-  geoip: "https://github.com/MetaCubeX/meta-rules-dat/releases/latest/download/geoip.metadb"
-  geosite: "https://github.com/MetaCubeX/meta-rules-dat/releases/latest/download/geosite.dat"
-  mmdb: "https://github.com/MetaCubeX/meta-rules-dat/releases/latest/download/country.mmdb"
-  asn: "https://github.com/MetaCubeX/meta-rules-dat/releases/latest/download/GeoLite2-ASN.mmdb"
+# 仅使用明确域名与 IP 规则，不下载地理数据库。
+geo-auto-update: false

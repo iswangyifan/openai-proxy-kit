@@ -1,384 +1,606 @@
 #!/usr/bin/env python3
-"""openai-proxy-kit 桌面控制台（GTK4 + libadwaita）
-
-还原 FlClash 概览页体验: 大电源开关 + 状态卡片 + 节点切换 + 延迟测试。
-本脚本只是"壳"，开关逻辑唯一实现在 switch.sh，节点操作走 mihomo API。
-
-依赖: python3-gi + GTK4 + libadwaita（GNOME 桌面默认自带）
-用法: python3 gui.py   （或从应用菜单"代理控制台"启动）
-"""
-
-import json
+"""GTK4 控制台：仪表盘、节点、实时日志、托盘及首次配置。"""
 import os
-import re
-import subprocess
 import sys
 import threading
-import urllib.error
-import urllib.parse
-import urllib.request
+import runtime
 from pathlib import Path
 
 import gi
 
-gi.require_version("Gtk", "4.0")
-gi.require_version("Adw", "1")
-from gi.repository import Adw, GLib, Gtk  # noqa: E402
+gi.require_version('Gtk', '4.0')
+gi.require_version('Adw', '1')
+from gi.repository import Adw, Gio, GLib, Gtk, Pango
 
-INJECT_MARKER = "# openai-proxy-kit injected"
+from runtime import (API_PORT, ASSETS, ENV, MIXED_PORT, OPENAI_GROUP, ROOT, SWITCH_BIN,
+                     UNITS, LogFollower, LogStore, command, delay_test, load_env,
+                     mihomo_get, put_node, query_status, run_switch)
+from tray import Tray
 
-
-# ============================================================
-# kit.env 读取（与 switch.sh 同构）
-# ============================================================
-def load_env() -> dict:
-    kit_env = Path(os.environ.get(
-        "KIT_ENV", os.path.expanduser("~/.local/share/openai-proxy-kit/kit.env")))
-    env = {}
-    if kit_env.is_file():
-        for ln in kit_env.read_text(encoding="utf-8").splitlines():
-            m = re.match(r"^([A-Z_]+)='(.*)'\s*$", ln.strip())
-            if m:
-                env[m.group(1)] = m.group(2)
-    return env
+APP_ID = 'io.github.opk.Console'
+STATE_LABELS = {'on': '代理已开启', 'off': '代理已关闭', 'partial': '代理需要检查', 'busy': '正在处理…'}
 
 
-ENV = load_env()
-MIXED_PORT = ENV.get("MIXED_PORT", "7890")
-API_PORT = ENV.get("API_PORT", "9090")
-OPENAI_GROUP = ENV.get("OPENAI_GROUP", "OpenAI 自动选择")
-UNITS = {
-    "mihomo": ENV.get("UNIT_MIHOMO", "mihomo-kit.service"),
-    "controller": ENV.get("UNIT_CONTROLLER", "openai-route-controller-kit.service"),
-    "guard": ENV.get("UNIT_GUARD_TIMER", "proxy-guard-kit.timer"),
-}
-SWITCH_BIN = os.environ.get(
-    "OPK_SWITCH_BIN",
-    str(Path(__file__).resolve().parent / "switch.sh"))
-DESKTOP_BAK = Path(ENV.get("INSTALL_HOME",
-                           os.path.expanduser("~/.local/share/openai-proxy-kit"))) / "backup/desktop"
-MIHOMO_API = f"http://127.0.0.1:{API_PORT}"
-
-UNIT_LABELS = {"mihomo": "mihomo 代理核心", "controller": "路由熔断器", "guard": "系统代理守护"}
+def label(text='', css=None, wrap=False):
+    widget = Gtk.Label(label=text, xalign=0, wrap=wrap)
+    widget.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
+    if css:
+        widget.add_css_class(css)
+    return widget
 
 
-# ============================================================
-# 后台动作（一律在工作线程执行，结果经 GLib.idle_add 回主线程）
-# ============================================================
-def unit_active(unit: str) -> bool:
-    try:
-        return subprocess.run(
-            ["systemctl", "--user", "is-active", "--quiet", unit],
-            capture_output=True, timeout=10).returncode == 0
-    except Exception:
-        return False
+def box(*children, vertical=True, spacing=12, **kwargs):
+    widget = Gtk.Box(orientation=Gtk.Orientation.VERTICAL if vertical else Gtk.Orientation.HORIZONTAL,
+                     spacing=spacing, **kwargs)
+    for child in children:
+        widget.append(child)
+    return widget
 
 
-def sys_proxy_mode() -> str:
-    try:
-        out = subprocess.run(["gsettings", "get", "org.gnome.system.proxy", "mode"],
-                             capture_output=True, text=True, timeout=5)
-        return out.stdout.strip().strip("'")
-    except Exception:
-        return "unknown"
+def button(text, callback, icon=None, css='secondary'):
+    widget = Gtk.Button(css_classes=[css])
+    children = ([Gtk.Image(icon_name=icon)] if icon else []) + [Gtk.Label(label=text)]
+    widget.set_child(box(*children, vertical=False, spacing=8, halign=Gtk.Align.CENTER))
+    widget.connect('clicked', callback)
+    return widget
 
 
-def count_injected() -> int:
-    mf = DESKTOP_BAK / "manifest.json"
-    if not mf.is_file():
-        return 0
-    try:
-        manifest = json.loads(mf.read_text(encoding="utf-8"))
-        return sum(1 for p in manifest.get("injected", {})
-                   if Path(p).is_file() and INJECT_MARKER in Path(p).read_text(encoding="utf-8"))
-    except Exception:
-        return 0
+def card(title, icon, *children, hero=False):
+    heading = box(Gtk.Image(icon_name=icon), label(title, 'section-title'), vertical=False, spacing=9)
+    return box(heading, *children, spacing=16, css_classes=['surface'] + (['hero'] if hero else []))
 
 
-def mihomo_get(path: str, timeout: float = 4) -> dict | None:
-    try:
-        with urllib.request.urlopen(f"{MIHOMO_API}{path}", timeout=timeout) as r:
-            return json.loads(r.read().decode())
-    except Exception:
-        return None
-
-
-def query_status() -> dict:
-    services = {k: unit_active(u) for k, u in UNITS.items()}
-    group = mihomo_get("/proxies/" + urllib.parse.quote(OPENAI_GROUP, safe=""))
-    return {
-        "services": services,
-        "sys_proxy": sys_proxy_mode(),
-        "injected": count_injected(),
-        "running": services["mihomo"] and sys_proxy_mode() == "manual",
-        "group_now": group.get("now") if group else None,
-        "nodes": group.get("all", []) if group else [],
-    }
-
-
-def run_switch(on: bool):
-    subprocess.run([SWITCH_BIN, "start" if on else "stop"],
-                   capture_output=True, text=True, timeout=60)
-
-
-def put_node(node: str) -> bool:
-    req = urllib.request.Request(
-        f"{MIHOMO_API}/proxies/" + urllib.parse.quote(OPENAI_GROUP, safe=""),
-        method="PUT",
-        data=json.dumps({"name": node}).encode(),
-        headers={"Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=5) as r:
-            return r.status == 204
-    except Exception:
-        return False
-
-
-def delay_test() -> dict:
-    """对 OpenAI 组整体测延迟，返回 {节点名: 毫秒}（失败节点不在结果里）"""
-    q = urllib.parse.urlencode({"url": "https://chatgpt.com", "timeout": 5000})
-    data = mihomo_get("/group/" + urllib.parse.quote(OPENAI_GROUP, safe="") + f"/delay?{q}",
-                      timeout=30)
-    return data if isinstance(data, dict) else {}
-
-
-CSS = b"""
-.power-btn {
-    border-radius: 9999px; min-width: 96px; min-height: 96px;
-    background: @viewpoint_bg_color; color: @window_fg_color;
-    font-size: 44px; padding: 0; border: none;
-    transition: all 200ms ease;
-}
-.power-btn:hover { opacity: 0.9; }
-.power-btn.on {
-    background: @accent_bg_color; color: @accent_fg_color;
-    box-shadow: 0 0 24px alpha(@accent_bg_color, 0.45);
-}
-.status-dot {
-    border-radius: 9999px; min-width: 10px; min-height: 10px;
-    background: @insensitive_fg_color;
-}
-.status-dot.on { background: @success_color; }
-.dim-label { opacity: 0.65; }
-.delay-chip { font-size: 11px; border-radius: 6px; padding: 1px 7px;
-              background: alpha(@accent_bg_color, 0.15); }
-"""
-
-
-class MainWindow(Adw.PreferencesWindow):
-    REFRESH_SEC = 3
-
+class MainWindow(Adw.ApplicationWindow):
     def __init__(self, app):
-        super().__init__(application=app)
-        self.set_title("代理控制台")
-        self.set_default_size(460, 640)
-        self.switching = False
-
+        super().__init__(application=app, title='openai-proxy-kit · 代理控制台')
+        self.app = app
+        self.set_default_size(1080, 740)
+        self.add_css_class('opk')
+        self.delay_cache, self.node_rows = {}, {}
+        self.node_names = ()
+        self.log_revision, self.log_filters = -1, None
+        self.connect('close-request', self._close_requested)
+        self.connect('notify::visible', self._visibility_changed)
         provider = Gtk.CssProvider()
-        provider.load_from_data(CSS)
-        Gtk.StyleContext.add_provider_for_display(
-            self.get_display(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        provider.load_from_path(str(ASSETS / 'style.css'))
+        Gtk.StyleContext.add_provider_for_display(self.get_display(), provider,
+                                                 Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        Gtk.IconTheme.get_for_display(self.get_display()).add_search_path(str(ASSETS / 'icons'))
+        Gtk.Window.set_default_icon_name('openai-proxy-kit')
+        self.style_manager = Adw.StyleManager.get_default()
+        self.style_manager.connect('notify::dark', self._theme_changed)
+        self._theme_changed()
+        self.overlay = Adw.ToastOverlay()
+        self.set_content(self.overlay)
+        self.stack = Gtk.Stack(hexpand=True, vexpand=True,
+                               transition_type=Gtk.StackTransitionType.CROSSFADE, transition_duration=120)
+        self.stack.connect('notify::visible-child-name', self._page_changed)
+        self.sidebar = self._sidebar()
+        header = Adw.HeaderBar()
+        header.set_title_widget(Gtk.Label(label='代理控制台'))
+        toggle = Gtk.ToggleButton(icon_name='sidebar-show-symbolic', active=True, tooltip_text='显示或隐藏导航')
+        toggle.connect('toggled', lambda b: self.sidebar.set_visible(b.get_active()))
+        header.pack_start(toggle)
+        header.pack_end(button('查看日志', lambda *_: self.show_page('logs'), 'utilities-terminal-symbolic'))
+        toolbar = Adw.ToolbarView()
+        toolbar.add_top_bar(header)
+        toolbar.set_content(self.stack)
+        self.overlay.set_child(box(self.sidebar, toolbar, vertical=False, spacing=0))
+        self._overview_page()
+        self._nodes_page()
+        self._logs_page()
+        self._tools_page()
+        self.show_page('overview')
+        self.log_timer = GLib.timeout_add(400, self._render_logs)
 
-        self._build_overview_page()
-        self._build_nodes_page()
-        self._refresh_async()
+    def _theme_changed(self, *_):
+        if self.style_manager.get_dark():
+            self.add_css_class('dark')
+        else:
+            self.remove_css_class('dark')
 
-    # ---------- 概览页 ----------
-    def _build_overview_page(self):
-        page = Adw.PreferencesPage(title="概览", icon_name="go-home-symbolic")
+    def _sidebar(self):
+        logo = Gtk.Image.new_from_file(str(ASSETS / 'icons/openai-proxy-kit.svg'))
+        logo.set_pixel_size(38)
+        brand = box(logo, box(label('Proxy Kit', 'brand'), label('Codex / ChatGPT', 'brand-note'), spacing=3),
+                    vertical=False, spacing=10)
+        self.nav = Gtk.ListBox(selection_mode=Gtk.SelectionMode.SINGLE, vexpand=True)
+        self.pages = ['overview', 'nodes', 'logs', 'tools']
+        for name, icon in [('仪表盘', 'view-grid-symbolic'), ('代理节点', 'network-server-symbolic'),
+                           ('实时日志', 'utilities-terminal-symbolic'), ('工具与设置', 'preferences-system-symbolic')]:
+            row = Gtk.ListBoxRow()
+            row.set_child(box(Gtk.Image(icon_name=icon), label(name), vertical=False, spacing=12))
+            self.nav.append(row)
+        self.nav.connect('row-selected', lambda _n, row: self.stack.set_visible_child_name(
+            self.pages[row.get_index()]) if row else None)
+        self.tray_label = label('正在检测托盘支持', 'footer', True)
+        sidebar = box(brand, self.nav, box(self.tray_label, label('AI 访问 · 内网直连切换', 'footer'), spacing=8),
+                      spacing=28, css_classes=['sidebar'])
+        sidebar.set_size_request(194, -1)
+        return sidebar
 
-        # 电源开关卡片
-        grp = Adw.PreferencesGroup()
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10,
-                      valign=Gtk.Align.CENTER, margin_top=18, margin_bottom=14)
-        self.power_btn = Gtk.Button(css_classes=["power-btn"])
-        self.power_btn.set_child(Gtk.Label(label="⏻"))
-        self.power_btn.connect("clicked", self.on_power_clicked)
-        self.power_state_lbl = Gtk.Label(css_classes=["dim-label"])
-        box.append(self.power_btn)
-        box.append(self.power_state_lbl)
-        grp.add(box)
-        page.add(grp)
+    def _page(self, key, title, subtitle):
+        content = box(label(title, 'page-title'), label(subtitle, 'page-subtitle', True), spacing=16,
+                      css_classes=['content'])
+        self.stack.add_named(Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER, child=content), key)
+        return content
 
-        # 当前节点
-        grp = Adw.PreferencesGroup(title="当前节点")
-        self.node_row = Adw.ActionRow(title=OPENAI_GROUP, subtitle="—")
-        open_panel = Gtk.Button(icon_name="external-link-symbolic",
-                                tooltip_text="打开 metacubexd 管理面板")
-        open_panel.connect("clicked", lambda *_: Gtk.UriLauncher.new(
-            f"http://127.0.0.1:{API_PORT}/ui/").launch(self, None, None, None))
-        self.node_row.add_suffix(open_panel)
-        self.node_row.set_activatable(False)
-        grp.add(self.node_row)
-        page.add(grp)
+    def _overview_page(self):
+        page = self._page('overview', '仪表盘', '代理状态、当前节点与桌面应用配置，一处查看。')
+        self.state_pill = label('正在读取', 'pill')
+        self.state_pill.set_halign(Gtk.Align.START)
+        self.state_title = label('正在读取状态', 'state-title')
+        self.state_detail = label('正在核对服务与系统代理配置。', 'detail', True)
+        self.power_btn = button('开启代理', self.on_power_clicked, 'system-shutdown-symbolic', 'power')
+        self.power_btn.set_halign(Gtk.Align.START)
+        self.spinner = Gtk.Spinner()
+        hero = card('连接控制', 'network-workgroup-symbolic', self.state_pill, self.state_title,
+                    self.state_detail, box(self.power_btn, self.spinner, vertical=False), hero=True)
+        hero.set_hexpand(True)
+        self.proxy_value, self.proxy_detail = label('—', 'value', True), label('读取系统代理地址', 'detail', True)
+        self.service_value, self.service_detail = label('—', 'value'), label('读取服务状态', 'detail', True)
+        right = box(card('系统代理', 'network-transmit-receive-symbolic', self.proxy_value, self.proxy_detail),
+                    card('后台服务', 'system-run-symbolic', self.service_value, self.service_detail))
+        right.set_size_request(245, -1)
+        page.append(box(hero, right, vertical=False, spacing=16))
+        self.current_node, self.node_detail = label('尚未选择', 'value', True), label('启动代理后可查看候选节点', 'detail', True)
+        node_card = card('当前节点', 'network-server-symbolic', self.current_node, self.node_detail,
+                         button('管理节点', lambda *_: self.show_page('nodes'), 'go-next-symbolic'))
+        self.apps_value = label('—', 'value')
+        apps = card('应用代理配置', 'application-x-executable-symbolic', self.apps_value,
+                    label('已运行的应用不会自动更新代理环境变量，必要时请完全退出后重新打开。', 'detail', True))
+        grid = Gtk.Grid(column_spacing=16, row_spacing=16, column_homogeneous=True)
+        grid.attach(node_card, 0, 0, 1, 1)
+        grid.attach(apps, 1, 0, 1, 1)
+        page.append(grid)
+        page.append(box(Gtk.Image(icon_name='dialog-information-symbolic'),
+            label('需要访问公司内网时，可关闭代理恢复直连。节点延迟不代表账号或业务请求一定可用。', wrap=True),
+            vertical=False, css_classes=['notice']))
+        self.checked = label('尚未刷新', 'detail')
+        page.append(box(self.checked, button('刷新状态', lambda *_: self.app.refresh(), 'view-refresh-symbolic'), vertical=False))
 
-        # 服务状态
-        grp = Adw.PreferencesGroup(title="服务")
-        self.svc_rows = {}
-        self.svc_dots = {}
-        for key in ("mihomo", "controller", "guard"):
-            row = Adw.ActionRow(title=UNIT_LABELS[key])
-            dot = Gtk.Box(css_classes=["status-dot"])
-            row.add_suffix(dot)
-            row.set_activatable(False)
-            self.svc_rows[key] = row
-            self.svc_dots[key] = dot
-            grp.add(row)
-        page.add(grp)
+    def _nodes_page(self):
+        page = self._page('nodes', '代理节点', '查看当前选择；切换失败时可在实时日志中查看原因。')
+        self.nodes_summary = label('启动代理后显示候选节点', 'detail', True)
+        self.nodes_summary.set_hexpand(True)
+        self.delay_btn = button('测试延迟', self.on_delay_clicked, 'network-transmit-symbolic')
+        self.panel_btn = button('高级面板', self.open_panel, 'external-link-symbolic')
+        self.panel_btn.set_tooltip_text('仅在当前部署已安装 metacubexd 时可用')
+        page.append(box(self.nodes_summary, self.delay_btn, self.panel_btn, vertical=False))
+        self.node_list = Gtk.ListBox(css_classes=['nodes'], selection_mode=Gtk.SelectionMode.NONE)
+        self.node_list.connect('row-activated', self.on_node_activated)
+        page.append(self.node_list)
+        self.node_empty = label('暂无节点。请先开启代理；首次使用请到“工具与设置”配置订阅。', 'detail', True)
+        page.append(self.node_empty)
 
-        # 系统层
-        grp = Adw.PreferencesGroup(title="系统")
-        self.proxy_row = Adw.ActionRow(title="GNOME 系统代理", subtitle="—")
-        self.inject_row = Adw.ActionRow(title="桌面启动器注入", subtitle="—")
-        for r in (self.proxy_row, self.inject_row):
-            r.set_activatable(False)
-            grp.add(r)
-        page.add(grp)
+    def _logs_page(self):
+        page = self._page('logs', '实时日志', '服务日志与操作结果集中查看，复制内容自动隐藏 URL 和常见凭据字段。')
+        self.log_search = Gtk.SearchEntry(placeholder_text='搜索日志内容', hexpand=True)
+        self.log_source = Gtk.DropDown.new_from_strings(['全部来源', '操作', 'mihomo', 'controller', 'guard', '系统'])
+        self.log_level = Gtk.DropDown.new_from_strings(['全部级别', 'INFO', 'WARN', 'ERROR'])
+        page.append(box(self.log_search, self.log_source, self.log_level, vertical=False, spacing=8))
+        self.follow_switch = Gtk.Switch(active=True, valign=Gtk.Align.CENTER)
+        self.follow_switch.connect('notify::active', self._follow_changed)
+        page.append(box(label('实时跟随'), self.follow_switch,
+            button('复制', self.copy_logs, 'edit-copy-symbolic'), button('导出', self.export_logs, 'document-save-symbolic'),
+            button('清空视图', self.clear_logs, 'edit-clear-symbolic'), vertical=False, spacing=10))
+        self.log_view = Gtk.TextView(editable=False, cursor_visible=False, monospace=True,
+                                     wrap_mode=Gtk.WrapMode.WORD_CHAR, css_classes=['log-view'])
+        self.log_scroll = Gtk.ScrolledWindow(child=self.log_view, vexpand=True,
+                                             min_content_height=320, hscrollbar_policy=Gtk.PolicyType.NEVER)
+        page.append(self.log_scroll)
+        page.append(label('仅保留最近 1200 条。离开日志页或隐藏窗口会停止读取；清空视图不删除系统日志。', 'detail', True))
 
-        self.add(page)
+    def _tools_page(self):
+        page = self._page('tools', '工具与设置', '首次配置、链路诊断与窗口行为。')
+        self.subscription = Gtk.PasswordEntry(show_peek_icon=True, hexpand=True, placeholder_text='输入 Clash YAML 订阅地址')
+        self.configure_btn = button('配置并开启代理', self.configure, 'network-connect-symbolic', 'power')
+        self.setup_note = label('将创建用户服务、开启登录自启，并设置 GNOME HTTP/HTTPS 代理；关闭时恢复原设置。仅 OpenAI 相关域名走代理。', 'detail', True)
+        page.append(card('代理配置', 'document-properties-symbolic', self.setup_note,
+            self.subscription,
+            label('请使用你有权管理的设备和网络，并遵守组织网络政策。本项目与 OpenAI 无隶属或背书关系。', 'detail', True),
+            self.configure_btn))
+        self.desktop_switch = Gtk.Switch(active=False, valign=Gtk.Align.CENTER)
+        candidates = sorted(p.name for p in Path('/usr/share/applications').glob('*.desktop')
+                            if any(x in p.name.lower() for x in ('code', 'chatgpt', 'cursor')))
+        page.append(card('应用启动器适配（可选）', 'application-x-executable-symbolic',
+            box(label('首次配置时适配下列应用'), self.desktop_switch, vertical=False),
+            label('、'.join(candidates) or '未发现候选应用', 'detail', True),
+            label('默认关闭；开启后备份用户启动器并加入代理变量，关闭代理会恢复。已运行应用需要重启。', 'detail', True)))
+        self.diagnose_btn = button('运行链路诊断', self.diagnose, 'system-search-symbolic')
+        page.append(card('诊断与排障', 'dialog-information-symbolic',
+            label('检查服务、端口、节点与 OpenAI 连通性；结果写入实时日志。', 'detail', True), self.diagnose_btn,
+            button('恢复用户集成', self.reset_integration, 'edit-undo-symbolic')))
+        self.minimize_switch = Gtk.Switch(active=True, valign=Gtk.Align.CENTER)
+        page.append(card('窗口行为', 'preferences-desktop-display-symbolic',
+            box(label('关闭窗口时保留托盘'), self.minimize_switch, vertical=False),
+            label('托盘可用时关闭窗口将隐藏到托盘；托盘不可用时会明确询问退出方式。', 'detail', True),
+            button('关闭代理并退出', lambda *_: self.app.stop_and_quit(), 'application-exit-symbolic')))
 
-    # ---------- 节点页 ----------
-    def _build_nodes_page(self):
-        self.nodes_page = Adw.PreferencesPage(title="节点", icon_name="network-server-symbolic")
+    def show_page(self, name):
+        self.nav.select_row(self.nav.get_row_at_index(self.pages.index(name)))
 
-        header = Adw.PreferencesGroup()
-        hbox = Gtk.Box(spacing=10, halign=Gtk.Align.END)
-        self.delay_btn = Gtk.Button(label="测试延迟")
-        self.delay_btn.connect("clicked", self.on_delay_clicked)
-        hbox.append(self.delay_btn)
-        header.add(hbox)
-        self.nodes_page.add(header)
+    def _page_changed(self, *_):
+        if hasattr(self, 'follow_switch'):
+            self._follow_changed()
 
-        self.nodes_grp = Adw.PreferencesGroup(title=OPENAI_GROUP, description="点击切换节点")
-        self.nodes_page.add(self.nodes_grp)
-        self.nodes_grp_buf = self.nodes_grp  # 重建时替换
-        self.delay_cache = {}
-        self.add(self.nodes_page)
+    def _visibility_changed(self, *_):
+        if hasattr(self, 'follow_switch'):
+            self._follow_changed()
 
-    # ---------- 状态刷新 ----------
-    def _refresh_async(self):
-        threading.Thread(target=self._refresh_worker, daemon=True).start()
+    def _follow_changed(self, *_):
+        if self.get_visible() and self.stack.get_visible_child_name() == 'logs' and self.follow_switch.get_active():
+            self.app.follower.start()
+        else:
+            self.app.follower.stop()
 
-    def _refresh_worker(self):
-        try:
-            st = query_status()
-        except Exception as e:
-            st = {"error": str(e)}
-        GLib.idle_add(self._apply_status, st)
-        GLib.timeout_add_seconds(self.REFRESH_SEC, self._refresh_tick)
-
-    def _refresh_tick(self):
-        """返回 False 停止本轮链式调度；动作执行期间挂起轮询"""
-        if self.switching:
+    def _render_logs(self):
+        if self.stack.get_visible_child_name() != 'logs' or not self.get_visible():
             return True
-        threading.Thread(target=self._refresh_worker_once, daemon=True).start()
+        filters = (self.log_source.get_selected_item().get_string(),
+                   self.log_level.get_selected_item().get_string(), self.log_search.get_text())
+        revision = self.app.logs.revision
+        if (revision, filters) != (self.log_revision, self.log_filters):
+            self.log_revision, self.log_filters = revision, filters
+            text = '\n'.join(e.line() for e in self.app.logs.snapshot(*filters))
+            self.log_view.get_buffer().set_text(text or '暂无匹配日志。开启实时跟随或执行一次操作后，日志会显示在这里。')
+            if self.follow_switch.get_active():
+                GLib.idle_add(self._scroll_logs)
         return True
 
-    def _refresh_worker_once(self):
-        try:
-            st = query_status()
-        except Exception as e:
-            st = {"error": str(e)}
-        GLib.idle_add(self._apply_status, st)
-
-    def _apply_status(self, st):
-        if st.get("error"):
-            self.power_state_lbl.set_text("状态查询失败")
-            return False
-        running = st["running"]
-        self.power_btn.set_css_classes(["power-btn"] + (["on"] if running else []))
-        self.power_state_lbl.set_text("运行中" if running else "已停止")
-        self.node_row.set_subtitle(st["group_now"] or "—（mihomo 未运行）")
-        for key in ("mihomo", "controller", "guard"):
-            self.svc_dots[key].set_css_classes(
-                ["status-dot"] + (["on"] if st["services"].get(key) else []))
-        self.proxy_row.set_subtitle("manual → 127.0.0.1:" + MIXED_PORT
-                                    if st["sys_proxy"] == "manual"
-                                    else f"已关闭（{st['sys_proxy']}）")
-        n = st["injected"]
-        self.inject_row.set_subtitle(f"{n} 个应用生效" if n else "无")
-        if st["nodes"]:
-            self._rebuild_nodes(st["nodes"], st["group_now"])
+    def _scroll_logs(self):
+        adjustment = self.log_scroll.get_vadjustment()
+        adjustment.set_value(max(0, adjustment.get_upper() - adjustment.get_page_size()))
         return False
 
-    def _rebuild_nodes(self, nodes, now):
-        grp = Adw.PreferencesGroup(title=OPENAI_GROUP, description="点击切换节点")
-        for name in nodes:
-            if name in ("DIRECT", "REJECT"):
-                continue
-            row = Adw.ActionRow(title=name)
-            if name == now:
-                row.add_suffix(Gtk.Image(icon_name="object-select-symbolic"))
-                row.set_title(f"{name}  ✓")
-            if name in self.delay_cache:
-                d = self.delay_cache[name]
-                chip = Gtk.Label(label=f"{d} ms", css_classes=["delay-chip"])
-                row.add_suffix(chip)
-            row.connect("activated", self.on_node_activated, name)
-            grp.add(row)
-        self.nodes_page.remove(self.nodes_grp_buf)
-        self.nodes_grp_buf = grp
-        self.nodes_page.add(grp)
+    def filtered_log_text(self):
+        return '\n'.join(e.line() for e in self.app.logs.snapshot(
+            self.log_source.get_selected_item().get_string(), self.log_level.get_selected_item().get_string(),
+            self.log_search.get_text()))
 
-    # ---------- 交互 ----------
-    def on_power_clicked(self, *_):
-        if self.switching:
-            return
-        target_on = "on" not in self.power_btn.get_css_classes()
-        self.switching = True
-        self.power_state_lbl.set_text("正在开启…" if target_on else "正在关闭…")
-        self.power_btn.set_sensitive(False)
+    def copy_logs(self, *_):
+        self.get_clipboard().set(self.filtered_log_text())
+        self.toast('已复制脱敏日志')
 
-        def work():
+    def export_logs(self, *_):
+        dialog = Gtk.FileDialog(title='导出脱敏日志', initial_name='openai-proxy-kit.log')
+        content = self.filtered_log_text()
+
+        def saved(dlg, result):
             try:
-                run_switch(target_on)
-            finally:
-                GLib.idle_add(self._after_switch)
+                target = dlg.save_finish(result)
+                target.replace_contents(content.encode(), None, False, Gio.FileCreateFlags.REPLACE_DESTINATION | Gio.FileCreateFlags.PRIVATE, None)
+                self.toast('日志已导出')
+            except GLib.Error as exc:
+                if not exc.matches(Gtk.DialogError.quark(), Gtk.DialogError.DISMISSED):
+                    self.toast('导出失败，请检查目标目录权限')
+        dialog.save(self, None, saved)
 
-        threading.Thread(target=work, daemon=True).start()
+    def clear_logs(self, *_):
+        self.app.logs.clear()
+        self.toast('已清空当前视图，系统日志保留')
 
-    def _after_switch(self):
-        self.switching = False
-        self.power_btn.set_sensitive(True)
-        self._refresh_worker_once()
-        return False
+    def toast(self, text):
+        self.overlay.add_toast(Adw.Toast.new(text))
 
-    def on_node_activated(self, _row, name):
-        def work():
-            put_node(name)
-            GLib.idle_add(self._refresh_worker_once)
-        threading.Thread(target=work, daemon=True).start()
+    def apply_status(self, status):
+        phase = 'busy' if self.app.busy else status.get('phase', 'partial')
+        self.state_title.set_text(self.app.busy_text if self.app.busy else STATE_LABELS[phase])
+        self.state_pill.set_text('处理中' if self.app.busy else '已连接' if phase == 'on' else '需检查' if phase == 'partial'
+                                else '直连模式' if status.get('sys_proxy') == 'none' else '未接管')
+        self.state_pill.set_css_classes(['pill'] + (['success'] if phase == 'on' else ['warning'] if phase == 'partial' else []))
+        self.state_detail.set_text('正在执行操作，请稍候。' if self.app.busy else
+            '代理核心与系统代理已就绪，应用可能仍需重启。' if phase == 'on' else
+            '服务与系统代理状态不一致，请查看日志或运行诊断。' if phase == 'partial' else
+            '系统代理未由本工具接管。需要使用 AI 服务时可开启代理。')
+        self.power_btn.set_child(box(Gtk.Image(icon_name='system-shutdown-symbolic'),
+            Gtk.Label(label='关闭代理' if status.get('phase') in ('on', 'partial') else '开启代理'), vertical=False, spacing=8))
+        self.power_btn.set_sensitive(not self.app.busy and status.get('installed', False))
+        self.spinner.set_spinning(self.app.busy)
+        mode = status.get('sys_proxy', 'unknown')
+        self.proxy_value.set_text('已开启' if status.get('proxy_owned') else '已关闭' if mode == 'none' else '其他配置')
+        self.proxy_detail.set_text(f'127.0.0.1:{MIXED_PORT}' if status.get('proxy_owned') else
+                                   '系统直连' if mode == 'none' else status.get('proxy_target') or mode)
+        services = status.get('services', {})
+        self.service_value.set_text('核心运行中' if services.get('mihomo') else '核心已停止')
+        self.service_detail.set_text('自动切换：' + ('运行中' if services.get('controller') else '未运行') +
+                                    '  ·  守护：' + ('运行中' if services.get('guard') else '未运行'))
+        self.current_node.set_text(status.get('group_now') or '暂无节点')
+        self.node_detail.set_text(f"{len(status.get('nodes', []))} 个候选节点 · {OPENAI_GROUP}")
+        self.apps_value.set_text(f"{status.get('injected', 0)} 个启动器已配置")
+        self.checked.set_text('最近刷新 ' + status.get('checked_at', '—'))
+        if not status.get('installed'):
+            self.state_detail.set_text('首次使用请打开“工具与设置”，配置订阅后即可开启代理。')
+        self.delay_btn.set_sensitive(not self.app.busy and bool(status.get('nodes')))
+        self.configure_btn.set_sensitive(not self.app.busy)
+        if ENV:
+            self.configure_btn.get_child().get_last_child().set_text('升级内置控制器')
+            self.subscription.set_sensitive(False)
+            self.subscription.set_property('placeholder-text', '已有订阅配置；升级将复用现有配置')
+        else:
+            self.configure_btn.get_child().get_last_child().set_text('配置并开启代理')
+            self.subscription.set_sensitive(True)
+            self.subscription.set_property('placeholder-text', '输入 Clash YAML 订阅地址')
+            self.setup_note.set_text('复用已有端口与服务名，切换到软件包内置的控制器。核心关闭时不会为了升级而开启代理。')
+        self.diagnose_btn.set_sensitive(not self.app.busy)
+        ui = Path(ENV.get('MIHOMO_CONF_DIR', Path.home() / '.config/mihomo')) / 'ui'
+        self.panel_btn.set_sensitive(bool(status.get('running')) and (ui / 'index.html').is_file())
+        self._update_nodes(status)
+
+    def _update_nodes(self, status):
+        names = tuple(n for n in status.get('nodes', []) if n not in ('DIRECT', 'REJECT'))
+        self.node_empty.set_visible(not names)
+        self.nodes_summary.set_text(f"{len(names)} 个候选 · 当前 {status.get('group_now') or '未选择'}")
+        if names != self.node_names:
+            self.node_names = names
+            while self.node_list.get_first_child():
+                self.node_list.remove(self.node_list.get_first_child())
+            self.node_rows.clear()
+            for name in names:
+                title = label(name)
+                title.set_ellipsize(Pango.EllipsizeMode.END)
+                title.set_hexpand(True)
+                title.set_tooltip_text(name)
+                chip = label('', 'pill')
+                row = Gtk.ListBoxRow(activatable=True)
+                row.node_name = name
+                row.set_child(box(Gtk.Image(icon_name='network-server-symbolic'), title, chip, vertical=False))
+                self.node_list.append(row)
+                self.node_rows[name] = (row, chip)
+        for name, (row, chip) in self.node_rows.items():
+            current, delay = name == status.get('group_now'), self.delay_cache.get(name)
+            chip.set_text(('当前 · ' if current else '') + (f'{delay} ms' if delay else '未测速'))
+            chip.set_css_classes(['pill'] + (['success'] if current else []))
+            row.set_sensitive(not self.app.busy)
+
+    def on_power_clicked(self, *_):
+        self.app.switch(self.app.status.get('phase') not in ('on', 'partial'))
+
+    def on_node_activated(self, _list, row):
+        def finished(ok):
+            self.toast('节点已切换' if ok else '切换失败，请查看日志')
+            self.app.logs.add('操作', '节点切换' + ('成功' if ok else '失败'), 'INFO' if ok else 'ERROR')
+        self.app.task(lambda: put_node(row.node_name), finished, '正在切换节点…')
 
     def on_delay_clicked(self, *_):
-        self.delay_btn.set_sensitive(False)
+        def finished(result):
+            self.delay_cache = result
+            self._update_nodes(self.app.status)
+            self.toast('延迟测试完成' if result else '无可用测速结果，请查看服务状态')
+        self.app.task(delay_test, finished, '正在测试延迟…')
 
-        def work():
-            self.delay_cache = delay_test()
-            GLib.idle_add(self._after_delay)
-        threading.Thread(target=work, daemon=True).start()
+    def open_panel(self, *_):
+        Gtk.UriLauncher.new(f'http://127.0.0.1:{API_PORT}/ui/').launch(self, None, None, None)
 
-    def _after_delay(self):
-        self.delay_btn.set_sensitive(True)
-        self._refresh_worker_once()
-        return False
+    def configure(self, *_):
+        if ENV:
+            self.app.task(lambda: command(['bash', str(ROOT / 'install.sh'), 'controller'], timeout=30),
+                          self._configured, '正在升级内置控制器…')
+            return
+        subscription = self.subscription.get_text().strip()
+        if not subscription.startswith(('https://', 'http://')):
+            self.toast('请输入 HTTP 或 HTTPS 格式的 Clash 订阅地址')
+            return
+        env = dict(os.environ, SUB_URL=subscription, ASSUME_YES='1',
+                   DESKTOP_INJECT='1' if self.desktop_switch.get_active() else '0')
+        self.subscription.set_text('')
+        self.app.task(lambda: command(['bash', str(ROOT / 'install.sh')], timeout=300, env=env),
+                      self._configured, '正在配置代理…')
+
+    def _configured(self, result):
+        self.app.record_result(result, '配置')
+        if result.returncode == 0:
+            ENV.update(load_env())
+            runtime.refresh_config()
+            globals().update({key: getattr(runtime, key) for key in ('API_PORT', 'MIXED_PORT', 'OPENAI_GROUP')})
+            self.toast('配置完成')
+
+    def reset_integration(self, *_):
+        if self.app.busy:
+            return
+        dialog = Adw.MessageDialog.new(self, '恢复用户集成', '将关闭本工具服务、恢复系统代理与应用启动器，保留订阅配置和备份。之后可重新配置。')
+        dialog.add_response('cancel', '取消')
+        dialog.add_response('restore', '恢复并保留配置')
+        dialog.set_default_response('cancel')
+        dialog.set_close_response('cancel')
+        def response(_dialog, selected):
+            if selected != 'restore':
+                return
+            def finished(result):
+                self.app.record_result(result, '恢复用户集成')
+                if result.returncode == 0:
+                    runtime.refresh_config()
+                    globals().update({key: getattr(runtime, key) for key in ('API_PORT', 'MIXED_PORT', 'OPENAI_GROUP')})
+                    self.toast('已恢复，私有配置和备份保留')
+            self.app.task(lambda: command([sys.executable, str(ROOT / 'scripts/package_cleanup.py'), '--yes', '--keep-gui'], timeout=120), finished, '正在恢复用户集成…')
+        dialog.connect('response', response)
+        dialog.present()
+
+    def diagnose(self, *_):
+        self.show_page('logs')
+        self.app.task(lambda: command(['bash', str(ROOT / 'diagnose.sh')], timeout=120),
+                      lambda result: self.app.record_result(result, '诊断'), '正在运行诊断…')
+
+    def tray_available(self, available):
+        self.tray_label.set_text('托盘已就绪 · 关闭窗口可隐藏' if available else '当前桌面无可用托盘')
+        if not available and not self.get_visible():
+            self.present()
+
+    def _close_requested(self, *_):
+        if self.app.busy:
+            self.toast('操作进行中，完成后再关闭窗口')
+            return True
+        if self.app.tray.available and self.minimize_switch.get_active():
+            self.set_visible(False)
+            return True
+        dialog = Adw.MessageDialog.new(self, '关闭控制台', '可关闭代理后退出，或保留当前代理状态仅退出界面。')
+        for key, text in [('cancel', '取消'), ('keep', '保留代理并退出'), ('stop', '关闭代理并退出')]:
+            dialog.add_response(key, text)
+        dialog.set_default_response('cancel')
+        dialog.set_close_response('cancel')
+        dialog.set_response_appearance('stop', Adw.ResponseAppearance.SUGGESTED)
+        dialog.connect('response', lambda _d, response: self.app.stop_and_quit() if response == 'stop'
+                       else self.app.quit() if response == 'keep' else None)
+        dialog.present()
+        return True
 
 
 class KitApp(Adw.Application):
     def __init__(self):
-        super().__init__(application_id="io.github.openai-proxy-kit.console")
+        super().__init__(application_id=APP_ID, flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE)
+        self.add_main_option('logs', 0, GLib.OptionFlags.NONE, GLib.OptionArg.NONE, '打开实时日志', None)
+        self.logs = LogStore()
+        self.follower = LogFollower(self.logs)
+        self.status = {}
+        self.busy, self.refreshing, self.shutting_down = False, False, False
+        self.busy_text = '正在处理…'
+        self.window = None
+        self.tray = Tray(self._tray_action, self._tray_available)
+
+    def do_startup(self):
+        Adw.Application.do_startup(self)
+        quit_action = Gio.SimpleAction.new('quit', None)
+        quit_action.connect('activate', lambda *_: self.quit())
+        self.add_action(quit_action)
+        self.hold()
+        self.tray.start()
+        self.poll = GLib.timeout_add_seconds(5, self.refresh)
+        self.logs.add('操作', '控制台已启动；打开窗口不会自动开启代理')
+
+    def do_command_line(self, cli):
+        self.activate()
+        if cli.get_options_dict().contains('logs'):
+            self.window.show_page('logs')
+        return 0
 
     def do_activate(self):
-        win = self.props.active_window or MainWindow(self)
-        win.present()
+        if self.window is None:
+            self.window = MainWindow(self)
+        self.window.present()
+        self.window.tray_available(self.tray.available)
+        self.refresh()
+
+    def _tray_action(self, action):
+        if action in ('show', 'logs'):
+            self.activate()
+            if action == 'logs':
+                self.window.show_page('logs')
+        elif action == 'toggle':
+            self.switch(self.status.get('phase') not in ('on', 'partial'))
+        elif action == 'quit':
+            self.stop_and_quit()
+
+    def _tray_available(self, available):
+        if self.window:
+            self.window.tray_available(available)
+
+    def refresh(self):
+        if self.refreshing or self.busy or self.shutting_down:
+            return True
+        self.refreshing = True
+
+        def worker():
+            try:
+                status = query_status()
+            except Exception as exc:
+                self.logs.add('系统', f'状态查询失败：{exc}', 'ERROR')
+                status = dict(self.status, phase='partial', running=False)
+            GLib.idle_add(self._status_ready, status)
+        threading.Thread(target=worker, daemon=True).start()
+        return True
+
+    def _status_ready(self, status):
+        self.refreshing = False
+        if not self.shutting_down:
+            self.status = status
+            self._publish()
+        return False
+
+    def _publish(self):
+        phase = 'busy' if self.busy else self.status.get('phase', 'off')
+        self.tray.update(phase, self.busy_text if self.busy else STATE_LABELS[phase])
+        if self.window:
+            self.window.apply_status(self.status)
+
+    def task(self, work, completed, title):
+        if self.busy:
+            return
+        self.busy, self.busy_text = True, title
+        self.logs.add('操作', title)
+        self._publish()
+
+        def worker():
+            try:
+                result, error = work(), None
+            except Exception as exc:
+                result, error = None, str(exc)
+            GLib.idle_add(finish, result, error)
+
+        def finish(result, error):
+            self.busy = False
+            if error:
+                self.logs.add('操作', error, 'ERROR')
+                self.window.present()
+                self.window.toast('操作失败，请查看日志')
+            else:
+                completed(result)
+            self._publish()
+            self.refresh()
+            return False
+        threading.Thread(target=worker, daemon=True).start()
+
+    def record_result(self, result, action):
+        for line in ((result.stdout or '') + '\n' + (result.stderr or '')).splitlines():
+            if line.strip():
+                self.logs.add('操作', line, 'INFO' if result.returncode == 0 else 'ERROR')
+        text = action + ('完成' if result.returncode == 0 else f'失败（退出码 {result.returncode}）')
+        self.logs.add('操作', text, 'INFO' if result.returncode == 0 else 'ERROR')
+        if self.window:
+            if result.returncode:
+                self.window.present()
+                self.window.show_page('logs')
+            self.window.toast(text)
+
+    def switch(self, on, quitting=False):
+        def finished(result):
+            self.record_result(result, '开启代理' if on else '关闭代理')
+            if quitting and result.returncode == 0:
+                self.task(query_status, verify_stopped, '正在确认关闭结果…')
+
+        def verify_stopped(status):
+            self.status = status
+            if any(status.get('services', {}).values()) or status.get('proxy_owned'):
+                self.window.present()
+                self.window.toast('仍有服务或代理配置未关闭，请查看日志')
+                self.logs.add('操作', '关闭后仍有残留服务或代理设置，已取消退出', 'ERROR')
+            else:
+                self.quit()
+        self.task(lambda: run_switch(on), finished, '正在开启代理…' if on else '正在关闭代理…')
+
+    def stop_and_quit(self):
+        if self.busy:
+            return
+        if not ENV:
+            self.quit()
+        else:
+            self.switch(False, quitting=True)
+
+    def do_shutdown(self):
+        self.shutting_down = True
+        GLib.source_remove(self.poll)
+        if self.window:
+            GLib.source_remove(self.window.log_timer)
+        self.follower.stop()
+        self.tray.close()
+        Adw.Application.do_shutdown(self)
 
 
 def main():
-    if not Path(SWITCH_BIN).exists() and not os.environ.get("OPK_SWITCH_BIN"):
-        print(f"[gui] 找不到 switch.sh: {SWITCH_BIN}", file=sys.stderr)
-        sys.exit(1)
-    app = KitApp()
-    app.run(None)
+    if not Path(SWITCH_BIN).exists():
+        print(f'找不到启停脚本：{SWITCH_BIN}', file=sys.stderr)
+        return 1
+    return KitApp().run(sys.argv)
 
 
-if __name__ == "__main__":
-    main()
+if __name__ == '__main__':
+    sys.exit(main())

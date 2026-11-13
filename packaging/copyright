@@ -1,0 +1,45 @@
+openai-proxy-kit
+Source: https://github.com/iswangyifan/openai-proxy-kit
+
+Project code and original artwork:
+MIT License
+
+Copyright (c) 2026 fangzhen
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+Bundled route controller: Copyright (c) 2026 Tianwen Dong, MIT.
+Complete terms: /usr/share/doc/openai-proxy-kit/CONTROLLER-LICENSE.
+Source and fixed commit: NOTICE.
+
+Bundled Node.js: Node.js contributors and included third-party authors.
+Complete copyright notices and terms: NODE-LICENSE in this directory.
+The runtime is modified only to embed the controller and remove symbol tables.
+
+Bundled mihomo: MetaCubeX contributors, GPL-3.0.
+Complete GPL terms: MIHOMO-LICENSE in this directory.
+Actual source version and binary digest: CORE-ORIGIN.json.
+Go runtime and module notices: MIHOMO-DEPENDENCIES/.
+Release downloads include the corresponding mihomo and module source archives.
+
+These components retain their own licenses; the project's MIT license does not
+replace or restrict them. Full notices must travel with redistributed packages.
+
+On Debian systems the complete GNU GPL version 3 is also available at
+/usr/share/common-licenses/GPL-3. The full text is included as MIHOMO-LICENSE.

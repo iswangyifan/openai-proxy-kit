@@ -16,6 +16,10 @@ probe listeners 端口映射约定（必须与上游 openai-route-controller 一
 """
 
 import argparse
+import os
+import secrets
+import tempfile
+import urllib.request
 import re
 import subprocess
 import sys
@@ -36,16 +40,17 @@ GENERATED_HEADER = (
 def fetch_subscription(source: str) -> str:
     """拉取订阅: http(s) 用 curl，否则按本地文件读取"""
     if source.startswith(("http://", "https://")):
-        r = subprocess.run(
-            ["curl", "-fsSL", "--connect-timeout", "15", "--max-time", "60", source],
-            capture_output=True, text=True,
-        )
-        if r.returncode != 0:
-            die(f"订阅拉取失败: {source}\n{r.stderr.strip()}")
-        return r.stdout
+        try:
+            with urllib.request.urlopen(source, timeout=60) as response:
+                payload = response.read(8 * 1024 * 1024 + 1)
+                if len(payload) > 8 * 1024 * 1024:
+                    die('订阅超过 8 MiB 限制')
+                return payload.decode('utf-8-sig')
+        except (OSError, ValueError):
+            die("订阅拉取失败，请检查地址、证书与网络")
     p = Path(source).expanduser()
     if not p.is_file():
-        die(f"订阅文件不存在: {source}")
+        die("订阅文件不存在，请检查输入")
     return p.read_text(encoding="utf-8", errors="replace")
 
 
@@ -64,7 +69,7 @@ def extract_proxies(text: str) -> list[dict]:
     try:
         data = yaml.safe_load(stripped)
     except yaml.YAMLError as e:
-        die(f"订阅 yaml 解析失败: {e}")
+        die("订阅 YAML 解析失败；为保护凭据不打印订阅原文")
     proxies = data.get("proxies") if isinstance(data, dict) else None
     if not proxies:
         die("订阅 yaml 中 proxies 为空")
@@ -112,6 +117,7 @@ def build_config(proxies: list[dict], openai_names: list[str], args) -> dict:
 
     # 静态 proxies: 组与 probe listeners 都按「节点名快照」设计（上游 controller
     # 的 probe 端口映射约定依赖静态节点名），订阅更新由 install.sh update 重新生成
+    config["secret"] = os.environ.get("MIHOMO_SECRET") or secrets.token_hex(32)
     config["proxies"] = proxies
 
     # --- proxy-groups ---
@@ -131,7 +137,7 @@ def build_config(proxies: list[dict], openai_names: list[str], args) -> dict:
         {
             "name": "漏网之鱼",
             "type": "select",
-            "proxies": ["自动选择", "DIRECT"],
+            "proxies": ["DIRECT", "自动选择"],
         },
     ]
 
@@ -144,7 +150,7 @@ def build_config(proxies: list[dict], openai_names: list[str], args) -> dict:
 
     # --- probe listeners: 与上游 controller 的「去重+排序+端口偏移」约定严格一致 ---
     listeners = []
-    for i, name in enumerate(sorted(set(openai_names))):
+    for i, name in enumerate(sorted(set(openai_names), key=lambda n: n.encode("utf-16-be"))):
         listeners.append({
             "name": f"openai-route-probe-{i}",
             "type": "mixed",
@@ -159,7 +165,7 @@ def build_config(proxies: list[dict], openai_names: list[str], args) -> dict:
 
 def main():
     ap = argparse.ArgumentParser(description="openai-proxy-kit 订阅配置生成器")
-    ap.add_argument("--sub-url", required=True,
+    ap.add_argument("--sub-url", default=os.environ.get("SUB_URL"),
                     help="机场订阅 URL（http/https）或本地订阅文件路径")
     ap.add_argument("--out", required=True, help="输出 mihomo 配置文件路径")
     ap.add_argument("--templates-dir", default=None,
@@ -180,10 +186,12 @@ def main():
                     help="-t 校验用的 mihomo 配置目录（geodata 所在）")
     args = ap.parse_args()
 
+    if not args.sub_url:
+        ap.error("缺少订阅 URL 或 SUB_URL 环境变量")
     if args.templates_dir is None:
         args.templates_dir = str(Path(__file__).resolve().parent.parent / "templates")
 
-    print(f"[gen_config] 拉取订阅: {args.sub_url[:60]}{'...' if len(args.sub_url) > 60 else ''}")
+    print("[gen_config] 拉取订阅（地址已隐藏）")
     text = fetch_subscription(args.sub_url)
 
     proxies = extract_proxies(text)
@@ -210,23 +218,21 @@ def main():
     out = Path(args.out).expanduser()
     out.parent.mkdir(parents=True, exist_ok=True)
 
-    tmp = out.with_suffix(out.suffix + ".tmp")
-    with open(tmp, "w", encoding="utf-8") as f:
-        f.write(GENERATED_HEADER)
-        yaml.dump(config, f, allow_unicode=True, sort_keys=False,
-                  default_flow_style=False, width=200)
-
-    # 可选语法校验
-    if args.mihomo_bin:
-        cmd = [args.mihomo_bin, "-t", "-d",
-               args.mihomo_conf_dir or str(out.parent), "-f", str(tmp)]
-        r = subprocess.run(cmd, capture_output=True, text=True)
-        if r.returncode != 0:
-            tmp.unlink(missing_ok=True)
-            die(f"mihomo -t 校验失败:\n{r.stdout}\n{r.stderr}")
-        print("[gen_config] mihomo -t 语法校验通过")
-
-    tmp.replace(out)
+    fd, temporary = tempfile.mkstemp(prefix='.' + out.name + '.', dir=out.parent)
+    tmp = Path(temporary)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(GENERATED_HEADER)
+            yaml.dump(config, f, allow_unicode=True, sort_keys=False, default_flow_style=False, width=200)
+        if args.mihomo_bin:
+            cmd = [args.mihomo_bin, "-t", "-d", args.mihomo_conf_dir or str(out.parent), "-f", str(tmp)]
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=45)
+            if r.returncode != 0:
+                die("mihomo -t 校验失败（配置与节点凭据不写入日志）")
+            print("[gen_config] mihomo -t 语法校验通过")
+        tmp.replace(out)
+    finally:
+        tmp.unlink(missing_ok=True)
     print(f"[gen_config] 已生成: {out}")
 
 

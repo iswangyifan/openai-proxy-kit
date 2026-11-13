@@ -1,80 +1,38 @@
-# troubleshooting — 实战踩坑记录
+# 排障与恢复
 
-以下问题全部在一台 Ubuntu 24.04 (GNOME) + VSCode/Codex + ChatGPT 桌面版的
-真实机器上踩过并定因，收录于此供排查参考。
+## 安装文件不支持 / 命令未找到
 
-## 1. VSCode 的 Codex 插件极卡/转圈，但系统代理"看着正常"
+先确认下载文件实际存在，再在所在目录执行 apt install。命令未找到通常意味着安装尚未成功；不要将构建路径当下载路径使用。
 
-**现象**：插件加载账号失败、模型列表超时、每次请求等 30-60s；浏览器一切正常。
+## 关闭后仍无法访问网络
 
-**根因**：Codex 插件是 Rust 网络栈，**不读 GNOME 系统代理设置，只认
-`http_proxy`/`https_proxy` 环境变量**。从桌面图标启动的 VSCode 没有这些变量，
-插件直连 OpenAI 被墙。
+1. 执行 `openai-proxy-kit stop`，查看是否返回失败，不要仅凭开关颜色判断。
+2. 执行 `openai-proxy-kit status` 与 `openai-proxy-kit diagnose`，检查各协议目标和服务。
+3. 完全退出并重开曾经带代理启动的应用；工具无法改写现有进程的环境变量。
+4. 使用 `openai-proxy-kit reset` 恢复用户集成，保留私有配置和备份。
 
-**排查**：
-```bash
-# 1. 代理链路本身通不通
-curl -x http://127.0.0.1:7890 -sI https://chatgpt.com | head -1
+如果软件已被手工删除，先重装相同或更新版本，再执行 reset。不要删除备份。
 
-# 2. 插件进程有没有代理变量（用 diagnose.sh --pid 或手工）
-pgrep -af 'extensions/openai.chatgpt.*codex'   # 找到 pid
-tr '\0' '\n' < /proc/<pid>/environ | grep -i proxy
-```
-
-**修复**：`./install.sh desktop` 注入桌面启动器（或对已运行实例：完全退出
-VSCode 后从应用菜单重启——注意 VSCode 是单实例，旧实例活着时新启动只是给它
-开窗口，代理变量不会生效）。
-
-**注意**：改 VSCode 设置里的 `http.proxy` 没用——那只管 VSCode 自身网络，
-管不到 Codex 插件这个独立子进程。
-
-## 2. FlClash 冲突
-
-**现象**：安装本工具后代理全瘫 / FlClash 退出后全网断开。
-
-**根因**：FlClash 抢占 7890 端口；其退出时还会把 GNOME 系统代理开关改成
-none，导致所有遵循系统代理的应用直连被墙。
-
-**修复**：完全退出 FlClash 再安装本工具（install.sh 会检测并拦截）；已被
-关掉的代理开关由 proxy-guard 每分钟自动恢复。
-
-## 3. chatgpt.com 返回 Cloudflare 403 "Country, region, or territory not supported"
-
-**现象**：节点延迟正常、api.openai.com 返回 401（正常），但网页/登录被拒，
-cf-ray 落在 LAX 等风控出口。
-
-**根因**：该节点出口 IP 段被 OpenAI 登录风控拉黑——**API 可用但登录被拒**。
-熔断器的探测判据是页面可达，探不出这种风控拒绝（能力边界）。
-
-**修复**：在管理面板（http://127.0.0.1:9090/ui/）的「OpenAI 自动选择」组里
-手动切换其他节点。实测规律：FDCservers 系（无论叫什么地区）多被拒；
-Amazon/Wap.ac 出口的 JP/KR/TW 节点多为可用。
-
-## 4. 机场更新节点后 mihomo 起不来 / probe 引用失效
-
-**现象**：`mihomo-kit.service` 启动失败，日志报组内引用了不存在的节点名；
-或 controller 报 `No isolated probe route`。
-
-**根因**：订阅节点名是生成配置时的快照。机场改名/下线节点后，
-`OpenAI 自动选择` 组和 probe listeners 里的引用就悬空了。
-
-**修复**：`./install.sh update`（重拉订阅、重新生成配置、重启服务）。
-
-## 5. 注入后应用没生效
-
-**清单**：
-- 应用是否**完全退出**过？（托盘里活着不算退出；单实例应用新启动只是开窗口）
-- 是否从**应用菜单**启动？（终端里手动 `code` 启动不带注入——除非终端本身
-  有代理变量）
-- 验证：`tr '\0' '\n' < /proc/<pid>/environ | grep -i proxy` 应看到
-  `http_proxy=http://127.0.0.1:7890`
-
-## 6. 注销/重启后服务停了
-
-systemd 用户服务在用户会话结束时会停止。若需常驻：
+紧急需要直连且你确认当前所有手动代理都可关闭时，可以在当前用户会话执行：
 
 ```bash
-loginctl enable-linger $USER
+gsettings set org.gnome.system.proxy mode none
 ```
 
-install.sh 检测到未开启 linger 时会提示。
+这会关闭当前 GNOME 手动代理，包括其他软件设置的代理；恢复工作网络前请核对原设置。它不会清理已运行应用的环境变量，也不是完整卸载步骤。
+
+## API 返回 401 / 节点为空
+
+旧部署在升级后执行 `openai-proxy-kit upgrade`，再重新打开 GUI。不要删除 API 认证来排障，不要把密钥放在截图或 URL 中。端口被其他应用占用时先停用冲突软件。
+
+## 启动器提示被手工编辑
+
+为防止丢失用户修改，工具会拒绝覆盖注入后被编辑的启动器。对照私有备份合并自定义参数并移除注入变量，再重试 reset。不要直接删掉备份或清空 manifest。旧版已经覆盖且未备份的原内容不能自动恢复。
+
+## 无托盘 / 关闭窗口后如何退出
+
+检查桌面是否提供 StatusNotifierItem 支持。缺少托盘时关闭窗口会给出退出选择；“保留代理并退出”会保留后台服务，“关闭代理并退出”会先检查清理结果。
+
+## 日志与问题反馈
+
+优先提供发行版本、系统/桌面、最小复现及错误摘要。导出虽有脱敏，仍可能包含内部域名和自由文本。不要上传真实订阅、节点配置、令牌或完整未审查日志。安全漏洞使用[私密报告渠道](../SECURITY.md)。

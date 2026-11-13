@@ -1,0 +1,89 @@
+# openai-proxy-kit
+
+面向 Linux 开发者的 **Codex / ChatGPT 代理控制台**：一键启停、原生 GUI、状态托盘与实时日志，方便在 AI 服务访问和公司内网直连之间切换。
+
+项目参考 [FlClash](https://github.com/chen08209/FlClash) 的桌面交互思路，基于 GTK4 / libadwaita 和 mihomo 实现。发行包内置代理核心、自带运行时的路由控制器，**使用者无需安装 Node.js、Git，也无需克隆或保留独立 controller 源码目录**。
+
+当前提供 Ubuntu 24.04 / GNOME 的 amd64 `.deb` 构建。GTK、Python 等系统依赖由包管理器处理；这不是面向所有发行版的单文件静态程序。
+
+## 界面预览
+
+![仪表盘](docs/images/dashboard.png)
+
+截图来自隔离的离线桌面验证；测试节点与日志示例不表示真实连通性结果。
+
+## 当前功能
+
+- **仪表盘**：浅灰蓝卡片布局，集中展示代理开关、系统代理、后台服务、当前节点与启动器配置；支持浅深色主题。
+- **一键启停**：GUI、托盘与 CLI 使用同一套启停逻辑；开启前检查端口归属，关闭时逐协议恢复原设置，保留其他软件后续改动。
+- **状态托盘**：专属状态图标，支持打开控制台、启停、查看日志、关闭代理并退出；无托盘支持时提供明确的退出选项。
+- **实时日志**：聚合服务日志、守护日志与操作结果，支持来源/级别筛选、搜索、复制、导出和清空视图。离开日志页或隐藏窗口后停止读取。
+- **节点管理**：查看当前节点、手动切换和批量延迟测试；轮询更新保留列表行，避免重建造成跳动。
+- **内置故障切换**：保留上游控制器的候选验证、自动切换、切换后复核、失败回滚与节点隔离，构建为自带 Node 运行时的内部二进制。
+- **首次配置与旧部署适配**：GUI 输入订阅进行配置；已有安装可切换到内置控制器，复用原有端口与 unit 名。
+- **桌面应用适配**：为选定应用的用户级启动器配置代理环境变量，支持停用和恢复。
+- **链路诊断**：检查服务、端口、代理组、连通性、系统代理与指定进程环境变量。
+
+[实时日志预览](docs/images/logs.png) · [深色节点页预览](docs/images/nodes-dark.png)
+
+## 安装与使用
+
+下载发行包后安装：
+
+```bash
+sudo apt install ./openai-proxy-kit_0.2.1_amd64.deb
+openai-proxy-kit
+```
+
+从应用菜单打开 **OpenAI Proxy Kit**，在“工具与设置”中输入 Clash YAML 订阅地址，点击“配置并开启代理”。安装软件或只打开窗口不会自动开启代理；首次配置按钮会生成用户服务并开启代理。
+
+```bash
+openai-proxy-kit start          # 开启
+openai-proxy-kit stop           # 关闭
+openai-proxy-kit status         # 查看状态
+openai-proxy-kit --logs         # GUI 日志页
+openai-proxy-kit logs --follow  # 终端持续输出日志，Ctrl+C 结束
+openai-proxy-kit diagnose       # 链路诊断
+```
+
+更多说明见[安装与使用](docs/README.md)。
+
+## 使用边界
+
+- 默认仅明确列出的 OpenAI 相关域名走代理，其余直连；不启用 TUN、不修改系统 DNS，也不保证所有企业内网/VPN 环境兼容。
+- 启停修改启动器配置，不会更新已经运行的应用进程；VSCode / ChatGPT 可能需要完全退出后重新启动。
+- 当前 `start` 同时设置服务自启动，`stop` 同时取消服务自启动；独立自启动设置仍在规划中。
+- 节点延迟和路径探测不能保证账号登录或业务请求成功。
+- 订阅、节点配置和完整服务日志可能含有敏感信息。控制台会隐藏 URL 与常见凭据字段，分享导出文件前仍应检查。
+- GNOME 托盘需要桌面提供 StatusNotifierItem 支持；缺少支持时，控制台不会隐藏成无法找回的状态。
+- 本工具不提供订阅、代理节点或账号。
+
+## 从源码构建发行包
+
+仅开发/构建机器需要 [固定 Node.js 版本](packaging/NODE-VERSION)、npm 和 Debian 打包工具：
+
+```bash
+bash packaging/fetch-core.sh
+bash packaging/build-linux.sh
+```
+
+产物位于 `dist/`。controller 源码只作为本项目的构建输入，发行包不包含 `.mjs`、上游 Git 仓库或 `node_modules`。构建方法、验证与卸载步骤见[详细文档](docs/README.md)。
+
+## 安全与项目声明
+
+本项目是独立第三方开源工具，与 OpenAI、FlClash 无隶属或背书关系，不提供订阅、节点或账号。请在有权管理的设备和网络中使用，遵守适用法律、组织网络政策及相关服务条款。软件按现状提供，不保证持续可用或特定访问结果；责任与许可边界以各组件许可证为准。
+
+管理 API 使用随机密钥，仅绑定回环地址。订阅与节点配置采用私有权限；日志脱敏不代表可无检查公开。数据流、恢复方法及私密漏洞报告见[安全策略](SECURITY.md)。
+
+## 文档与许可
+
+- [安装与使用](docs/README.md)
+- [常见问题](docs/troubleshooting.md)
+- [后续迭代](docs/roadmap.md)
+- [贡献指南](CONTRIBUTING.md)
+- [变更记录](CHANGELOG.md)
+- [发布与验收流程](docs/releasing.md)
+- [第三方组件声明](NOTICE)
+- [MIT 许可证](LICENSE)
+
+控制器基于 [openai-route-controller](https://github.com/tianwdong/openai-route-controller)（MIT），保留其原有实现与版权声明。mihomo、Node.js 及其他组件各自的许可证随发行包提供。

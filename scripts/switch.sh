@@ -6,10 +6,10 @@
 #   switch.sh stop     # 一键关闭: 全部停用并取消自启，公司内网恢复直连
 #   switch.sh status   # 查看各层状态
 #
-# 被 install.sh 的 start/stop/status 子命令和 Web 控制台 (console.py) 共用，
+# 被 install.sh 的 start/stop/status 子命令与 GTK 控制台共用，
 # 是开关逻辑的唯一实现源。
 
-set -euo pipefail
+set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # 安装态: 与 inject_desktop.py 同目录（install 时拷贝到 $INSTALL_HOME/scripts/）
@@ -19,7 +19,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 KIT_ENV="${KIT_ENV:-$HOME/.local/share/openai-proxy-kit/kit.env}"
 [ -f "$KIT_ENV" ] || die "未安装（找不到 $KIT_ENV），请先运行 ./install.sh"
 # shellcheck disable=SC1090
-. "$KIT_ENV"
+lock_kit
+load_kit_env || die "安装状态无效，请重新配置"
 
 SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
 DESKTOP_BAK="$INSTALL_HOME/backup/desktop"
@@ -29,6 +30,15 @@ INJECT_PY="$SCRIPT_DIR/inject_desktop.py"
 has_gsettings() { command -v gsettings >/dev/null 2>&1; }
 
 unit_exists() { [ -f "$SYSTEMD_USER_DIR/$1" ]; }
+stop_unit() {
+    if unit_exists "$1"; then
+        systemctl --user disable --now "$1"
+    elif systemctl --user is-active --quiet "$1"; then
+        # unit 文件丢失时，systemd 仍可能缓存并运行该服务。
+        systemctl --user stop "$1"
+    fi
+}
+
 
 # common.sh 缺位时的兜底（正常安装总在，防御式）
 if ! command -v port_in_use >/dev/null 2>&1; then
@@ -37,49 +47,66 @@ fi
 
 svc_start() {
     local u
-    for u in "$UNIT_MIHOMO" "$UNIT_CONTROLLER" "$UNIT_GUARD_TIMER"; do
+    if [ -z "${MIHOMO_SECRET:-}" ]; then
+        bash "$SCRIPT_DIR/../install.sh" controller
+        load_kit_env || return 1
+    fi
+    if port_in_use "$MIXED_PORT" && ! systemctl --user is-active --quiet "$UNIT_MIHOMO"; then
+        die "端口 $MIXED_PORT 已被其他程序占用；请先退出其他代理或修改端口"
+    fi
+    unit_exists "$UNIT_MIHOMO" || die "核心服务未安装: $UNIT_MIHOMO"
+    proxy_started=0
+    trap 'code=$?; trap - EXIT; if [ "$code" != 0 ]; then if [ "$proxy_started" = 1 ]; then svc_stop || true; else systemctl --user disable --now "$UNIT_CONTROLLER" "$UNIT_MIHOMO" || true; fi; fi' EXIT
+    trap 'exit 143' TERM
+    trap 'exit 130' INT
+    systemctl --user enable --now "$UNIT_MIHOMO"
+    sleep 1
+    local core_pid
+    core_pid=$(systemctl --user show "$UNIT_MIHOMO" -p MainPID --value)
+    if ! [[ "$core_pid" =~ ^[1-9][0-9]*$ ]] || \
+       ! ss -tlnpH "sport = :$MIXED_PORT" 2>/dev/null | grep -Fq "pid=$core_pid,"; then
+        err "无法确认端口 $MIXED_PORT 属于本工具核心，正在回滚"
+        return 1
+    fi
+    for u in "$UNIT_CONTROLLER"; do
         if unit_exists "$u"; then
             systemctl --user enable --now "$u" 2>/dev/null || warn "启动失败: $u"
         else
             warn "unit 未安装，跳过: $u"
         fi
     done
-    # 防断网: 确认 mihomo 端口监听后才允许动系统代理
-    sleep 1
-    if ! port_in_use "$MIXED_PORT"; then
-        die "mihomo 端口 $MIXED_PORT 未监听（被 FlClash 等占用?）——已放弃开启系统代理，网络未受影响"
-    fi
     # 系统代理指向 mihomo（仅 GNOME）
-    if has_gsettings; then
-        gsettings set org.gnome.system.proxy.http host '127.0.0.1'
-        gsettings set org.gnome.system.proxy.http port "$MIXED_PORT"
-        gsettings set org.gnome.system.proxy.https host '127.0.0.1'
-        gsettings set org.gnome.system.proxy.https port "$MIXED_PORT"
-        gsettings set org.gnome.system.proxy mode 'manual'
-        ok "系统代理 → 127.0.0.1:$MIXED_PORT"
-    fi
+    proxy_started=1
+    python3 "$SCRIPT_DIR/system_proxy.py" start --state "$KIT_ENV"
     # 桌面启动器注入恢复
     if [ -f "$DESKTOP_BAK/manifest.json" ] && [ -f "$INJECT_PY" ]; then
         python3 "$INJECT_PY" enable \
             --proxy "http://127.0.0.1:$MIXED_PORT" \
-            --backup-dir "$DESKTOP_BAK" || warn "桌面注入恢复失败"
+            --backup-dir "$DESKTOP_BAK" || { err "桌面注入恢复失败"; return 1; }
     fi
+    if unit_exists "$UNIT_GUARD_TIMER"; then
+        systemctl --user enable --now "$UNIT_GUARD_TIMER" || { err "启动守护失败: $UNIT_GUARD_TIMER"; return 1; }
+    fi
+    trap - EXIT TERM INT
     ok "代理链路已开启（应用需从应用菜单重启才带代理）"
 }
 
 svc_stop() {
-    # 必须先停 guard（否则每分钟把系统代理改回 manual），再停其余
-    systemctl --user disable --now "$UNIT_GUARD_TIMER" "$UNIT_GUARD_SERVICE" 2>/dev/null || true
-    systemctl --user disable --now "$UNIT_MIHOMO" "$UNIT_CONTROLLER" 2>/dev/null || true
-    ok "服务已停止并取消自启"
-    if has_gsettings; then
-        gsettings set org.gnome.system.proxy mode 'none'
-        ok "系统代理已关闭（mode=none）"
-    fi
+    local u failed=0
+    for u in "$UNIT_GUARD_TIMER" "$UNIT_GUARD_SERVICE"; do
+        stop_unit "$u" || { err "关闭失败: $u"; return 1; }
+    done
+    # 恢复失败时保留核心，避免产生死代理。
+    python3 "$SCRIPT_DIR/system_proxy.py" stop --state "$KIT_ENV" || return 1
     if [ -f "$DESKTOP_BAK/manifest.json" ] && [ -f "$INJECT_PY" ]; then
-        python3 "$INJECT_PY" disable --backup-dir "$DESKTOP_BAK" || warn "桌面注入停用失败"
+        python3 "$INJECT_PY" disable --backup-dir "$DESKTOP_BAK" || { err "桌面注入停用失败，核心保留以便恢复"; return 1; }
     fi
-    ok "代理链路已关闭（已开着的应用窗口重开后恢复直连）"
+    # 守护与启动器已清理，再停止核心，避免死代理
+    for u in "$UNIT_CONTROLLER" "$UNIT_MIHOMO"; do
+        stop_unit "$u" || { err "停止失败: $u"; failed=1; }
+    done
+    [ "$failed" = 0 ] || die "部分组件关闭失败，请查看日志或运行诊断"
+    ok "代理链路已关闭（系统代理和启动器已恢复；运行中应用需重开）"
 }
 
 svc_status() {
@@ -95,13 +122,13 @@ svc_status() {
         inj=$(python3 -c "
 import json,sys
 from pathlib import Path
-mf=json.loads(Path('$DESKTOP_BAK/manifest.json').read_text())
+mf=json.loads(Path(sys.argv[1]).read_text())
 t=0
 for p in mf.get('injected',{}):
     f=Path(p)
     if f.is_file() and '# openai-proxy-kit injected' in f.read_text():
         t+=1
-print(t)")
+print(t)" "$DESKTOP_BAK/manifest.json")
         printf '  %-40s %s 个生效\n' "desktop-inject" "$inj"
     else
         printf '  %-40s %s\n' "desktop-inject" "未安装"
