@@ -83,9 +83,9 @@ svc_stop() {
 }
 
 svc_status() {
-    local u label
+    local u
     for u in "$UNIT_MIHOMO" "$UNIT_CONTROLLER" "$UNIT_GUARD_TIMER"; do
-        printf '  %-40s %s\n' "$u" "$(systemctl --user is-active "$u" 2>/dev/null || echo unknown)"
+        printf '  %-40s %s\n' "$u" "$(systemctl --user is-active "$u" 2>/dev/null || true)"
     done
     if has_gsettings; then
         printf '  %-40s %s\n' "gnome.system.proxy.mode" "$(gsettings get org.gnome.system.proxy mode 2>/dev/null)"
