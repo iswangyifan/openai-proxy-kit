@@ -238,10 +238,36 @@ class ReleaseSecurityTests(unittest.TestCase):
     def test_gui_detects_single_protocol_residue(self):
         def setting(schema, key):
             return ('127.0.0.1' if key == 'host' else runtime.MIXED_PORT) if schema.endswith('https') else ('other' if key == 'host' else '80')
-        with patch.object(runtime, 'unit_active', return_value=False), patch.object(runtime, 'sys_proxy_mode', return_value='manual'), \
+        with patch.dict(runtime.ENV, {'STATE_VERSION': '1'}, clear=True), \
+             patch.object(runtime, 'unit_active', return_value=False), patch.object(runtime, 'sys_proxy_mode', return_value='manual'), \
              patch.object(runtime, 'proxy_setting', side_effect=setting), patch.object(runtime, 'mihomo_get', return_value=None), \
              patch.object(runtime, 'count_injected', return_value=0):
             self.assertEqual(runtime.query_status()['phase'], 'partial')
+
+    def test_closed_tool_preserves_foreign_proxy_reusing_same_port(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {'STATE_VERSION': '2', 'INSTALL_HOME': tmp, 'MIXED_PORT': '17890', 'UNIT_MIHOMO': 'own.service'}
+            def command(args, **kwargs):
+                return subprocess.CompletedProcess(args, 0, '0' if args[0] == 'systemctl' else 'pid=999,', '')
+            with patch.object(system_proxy.subprocess, 'run', side_effect=command), \
+                 patch.object(system_proxy, 'settings') as settings:
+                system_proxy.stop(env)
+            settings.assert_not_called()
+
+    def test_gui_does_not_claim_reused_foreign_proxy_port(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            def setting(schema, key):
+                return '127.0.0.1' if key == 'host' else runtime.MIXED_PORT
+            with patch.dict(runtime.ENV, {'STATE_VERSION': '2'}, clear=True), \
+                 patch.object(runtime, 'INSTALL_HOME', Path(tmp)), \
+                 patch.object(runtime, 'unit_active', return_value=False), \
+                 patch.object(runtime, 'sys_proxy_mode', return_value='manual'), \
+                 patch.object(runtime, 'proxy_setting', side_effect=setting), \
+                 patch.object(runtime, 'mihomo_get', return_value=None), \
+                 patch.object(runtime, 'count_injected', return_value=0):
+                status = runtime.query_status()
+            self.assertFalse(status['proxy_owned'])
+            self.assertEqual(status['phase'], 'off')
 
     def test_existing_user_desktop_survives_cycles(self):
         with tempfile.TemporaryDirectory() as tmp:

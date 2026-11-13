@@ -30,7 +30,8 @@ class RuntimeTests(unittest.TestCase):
     def status(self, core, mode='none', host='127.0.0.1', port=None, group=True):
         def setting(schema, key):
             return host if key == 'host' else port or runtime.MIXED_PORT
-        with patch.object(runtime, 'unit_active', side_effect=lambda u: core and u == runtime.UNITS['mihomo']), \
+        with patch.dict(runtime.ENV, {'STATE_VERSION': '1'}, clear=True), \
+             patch.object(runtime, 'unit_active', side_effect=lambda u: core and u == runtime.UNITS['mihomo']), \
              patch.object(runtime, 'sys_proxy_mode', return_value=mode), \
              patch.object(runtime, 'proxy_setting', side_effect=setting), \
              patch.object(runtime, 'count_injected', return_value=0), \

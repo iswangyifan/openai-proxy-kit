@@ -53,6 +53,8 @@ class SwitchTests(unittest.TestCase):
             units = root / '.config/systemd/user'
             units.mkdir(parents=True)
             for unit in ['core.service', 'controller.service', 'guard.timer', 'guard.service']:
+                if unit == 'core.service' and state.get('missing_unit_file'):
+                    continue
                 (units / unit).touch()
             envfile = root / 'kit.env'
             envfile.write_text(f"INSTALL_HOME='{root}'\nMIXED_PORT='17890'\nMIHOMO_SECRET='synthetic'\nUNIT_MIHOMO='core.service'\n"
@@ -98,6 +100,11 @@ class SwitchTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('关闭失败', result.stderr)
         self.assertNotIn('disable --now core.service', calls, '守护停止失败时不得先停核心')
+
+    def test_stop_cached_running_unit_even_if_file_is_missing(self):
+        result, calls = self.run_switch('stop', active=True, missing_unit_file=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('systemctl --user stop core.service', calls)
 
 
 if __name__ == '__main__':

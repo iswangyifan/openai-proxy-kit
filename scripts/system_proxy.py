@@ -51,10 +51,24 @@ def start(env):
         raise
 
 
+def core_owns_port(env):
+    if not env.get('UNIT_MIHOMO'):
+        return False
+    result = subprocess.run(['systemctl', '--user', 'show', env['UNIT_MIHOMO'], '-p', 'MainPID', '--value'],
+                            capture_output=True, text=True, timeout=5)
+    pid = result.stdout.strip()
+    listeners = subprocess.run(['ss', '-tlnpH', 'sport = :' + env['MIXED_PORT']],
+                               capture_output=True, text=True, timeout=5).stdout
+    return pid.isdigit() and int(pid) > 0 and f'pid={pid},' in listeners
+
+
 def stop(env, clear_intent=True):
+    had_intent = (Path(env['INSTALL_HOME']) / 'proxy-enabled').exists()
     if clear_intent:
         (Path(env['INSTALL_HOME']) / 'proxy-enabled').unlink(missing_ok=True)
     path = snapshot_path(env)
+    if env.get('STATE_VERSION') == '2' and not path.exists() and not had_intent and not core_owns_port(env):
+        return  # 已关闭，无快照/意图且端口不属于本核心；保留同端口的其他代理。
     now = current()
     record = json.loads(path.read_text()) if path.exists() else {}
     before = record.get('before', record) or None
@@ -112,11 +126,7 @@ def resume(env):
     if settings('get', '', 'mode') != "'none'":
         return
     for _ in range(20):
-        pid = subprocess.run(['systemctl', '--user', 'show', env['UNIT_MIHOMO'], '-p', 'MainPID', '--value'],
-                             capture_output=True, text=True, timeout=5).stdout.strip()
-        listeners = subprocess.run(['ss', '-tlnpH', 'sport = :' + env['MIXED_PORT']],
-                                   capture_output=True, text=True, timeout=5).stdout
-        if pid.isdigit() and int(pid) > 0 and f'pid={pid},' in listeners:
+        if core_owns_port(env):
             start(env)
             return
         time.sleep(.2)

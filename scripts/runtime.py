@@ -124,7 +124,10 @@ def query_status():
     targets = [(proxy_setting(f"org.gnome.system.proxy.{kind}", "host"),
                 proxy_setting(f"org.gnome.system.proxy.{kind}", "port"))
                for kind in ("http", "https", "ftp", "socks")] if mode == "manual" else []
-    owned = mode == "manual" and any(host == "127.0.0.1" and port == MIXED_PORT
+    lease = bool(ENV) and (ENV.get('STATE_VERSION') != '2' or services['mihomo'] or
+                           (INSTALL_HOME / 'system-proxy-before.json').exists() or
+                           (INSTALL_HOME / 'proxy-enabled').exists())
+    owned = lease and mode == "manual" and any(host == "127.0.0.1" and port == MIXED_PORT
                                       for host, port in targets)
     group = mihomo_get("/proxies/" + urllib.parse.quote(OPENAI_GROUP, safe=""))
     group = group if isinstance(group, dict) else {}
