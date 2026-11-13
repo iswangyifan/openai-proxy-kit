@@ -66,15 +66,40 @@ SUB_URL="https://..." ./install.sh
 
 # 日常
 ./diagnose.sh                     # 全链路诊断（PASS/FAIL 清单）
+./install.sh start                # 一键开启整条代理链路
+./install.sh stop                 # 一键关闭（公司内网/仓库恢复直连）
+./install.sh status               # 查看各层状态
 ./install.sh update               # 机场节点变更后重新生成配置
 ./install.sh desktop              # 补充注入桌面启动器
 ./install.sh controller           # 补装路由熔断器（装好 Node 后）
+./install.sh gui                  # 补装桌面控制台（装好 GTK4 后）
 
 # 卸载（逐项确认，完整回滚）
 ./uninstall.sh
 ```
 
 管理面板：`http://127.0.0.1:9090/ui/`（metacubexd，可切组内节点）
+
+### 桌面控制台（FlClash 风格 GUI）
+
+安装后应用菜单出现「代理控制台」——一个 GTK4 + libadwaita 原生窗口（与系统设置
+同风格），不是网页：
+
+- **大电源开关**：一键启停整条代理链路（服务 + 系统代理 + 桌面注入）
+- 服务状态卡片（mihomo / 熔断器 / 守护 / 系统代理 / 桌面注入）
+- OpenAI 组节点列表：点击切换、批量延迟测试
+- 一键跳转 metacubexd 管理面板
+
+开关按钮背后的实现与 CLI 子命令 `./install.sh start|stop|status` 是同一份
+（`scripts/switch.sh`），GUI 只是壳。`start` 有防断网保护：mihomo 端口未就绪时
+不会把系统代理指过去（比如 FlClash 抢占 7890 的场景）。
+
+依赖 `python3-gi` + GTK4 + libadwaita（GNOME 桌面自带）。缺失时安装自动跳过
+GUI，补装依赖后运行 `./install.sh gui` 即可：
+
+```bash
+sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adwaita-1
+```
 
 ### 影子验证（不动现有代理环境）
 
@@ -123,7 +148,8 @@ bash tests/run_tests.sh
 ```
 
 自包含单元测试（合成订阅数据、不联网、不写真实系统状态）：配置生成的
-probe 排序约定/筛选/报错/清洗/截断、桌面注入三态（注入/幂等/还原）。
+probe 排序约定/筛选/报错/清洗/截断、桌面注入全生命周期（注入/幂等/还原/
+disable/enable 启停循环）、switch.sh 未安装拒绝、gui.py headless 冒烟。
 完整的影子安装冒烟见上文"影子验证"。
 
 ## 常见问题

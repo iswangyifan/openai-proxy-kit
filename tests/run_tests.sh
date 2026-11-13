@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # run_tests.sh — openai-proxy-kit 单元测试（自包含，不联网、不写真实系统状态）
 #
-# 覆盖: gen_config.py 的筛选/报错/清洗/结构约定 + inject_desktop.py 注入三态
+# 覆盖: gen_config.py 的筛选/报错/清洗/结构约定 + inject_desktop.py 注入/启停循环
+#       + switch.sh 未安装拒绝 + gui.py headless 冒烟
 # 需要本机有 mihomo 二进制（PATH 或 ~/.local/bin/mihomo）以启用 -t 校验；
 # 没有则跳过 -t 相关断言，不影响其余用例。
 #
@@ -128,14 +129,20 @@ else
 fi
 
 # T6 免交互无 SUB_URL（conf 目录预置 geodata/ui，避免测试走网络下载）
-# 注意: 输出经文件中转再 grep —— install.sh 预期 exit 1，直接管道会被 pipefail 误判
-( cd "$KIT_ROOT" && ASSUME_YES=1 SUB_URL= INSTALL_HOME="$WORK/t6home" \
-     MIXED_PORT=17891 API_PORT=19091 DNS_PORT=1154 MIHOMO_CONF_DIR="$GEODIR" \
-     bash install.sh > "$WORK/t6.out" 2>&1 )
-if grep -q '免交互模式必须' "$WORK/t6.out"; then
-    ok_ "T6 免交互无 SUB_URL 正确拒绝"
+# 注意1: 输出经文件中转再 grep —— install.sh 预期 exit 1，直接管道会被 pipefail 误判
+# 注意2: 用户机上正运行 FlClash/Clash Verge 时，install.sh 阶段 1 冲突检测会先行拦截，
+#        属环境不满足而非回归 → SKIP
+if pgrep -if 'flclash|clash-verge|verge-mihomo' >/dev/null 2>&1; then
+    printf '  [SKIP] T6 检测到 Clash 系软件运行中（install 环境检测会先行拦截），跳过\n'
 else
-    fail_ "T6 免交互拒绝消息未出现"
+    ( cd "$KIT_ROOT" && ASSUME_YES=1 SUB_URL= INSTALL_HOME="$WORK/t6home" \
+         MIXED_PORT=17891 API_PORT=19091 DNS_PORT=1154 MIHOMO_CONF_DIR="$GEODIR" \
+         bash install.sh > "$WORK/t6.out" 2>&1 )
+    if grep -q '免交互模式必须' "$WORK/t6.out"; then
+        ok_ "T6 免交互无 SUB_URL 正确拒绝"
+    else
+        fail_ "T6 免交互拒绝消息未出现（输出: $(tail -1 "$WORK/t6.out" 2>/dev/null)）"
+    fi
 fi
 
 echo "== inject_desktop.py =="
@@ -163,6 +170,58 @@ python3 "$INJ" inject --desktop-file "$DT/apps/app.desktop" --proxy http://127.0
 python3 "$INJ" restore --user-apps "$DT/apps" --backup-dir "$DT/backup" >/dev/null 2>&1 \
   && diff -q "$DT/backup/app.desktop.orig" "$DT/apps/app.desktop" >/dev/null \
   && ok_ "T9 还原（与原文件一致）" || fail_ "T9 还原"
+
+# T10-T12: disable/enable 启停循环（日常开关语义，restore 后 fixture 已还原，先重新注入）
+python3 "$INJ" inject --desktop-file "$DT/apps/app.desktop" --proxy http://127.0.0.1:17890 \
+    --user-apps "$DT/apps" --backup-dir "$DT/backup" >/dev/null 2>&1
+python3 "$INJ" disable --user-apps "$DT/apps" --backup-dir "$DT/backup" >/dev/null 2>&1 \
+  && diff -q "$DT/backup/app.desktop.orig" "$DT/apps/app.desktop" >/dev/null \
+  && ok_ "T10 disable（注入版还原为原版）" || fail_ "T10 disable"
+python3 -c "import json; m=json.load(open('$DT/backup/manifest.json')); assert len(m['injected'])==1" 2>/dev/null \
+  && ok_ "T10b disable 后 manifest 保留（enable 可恢复）" || fail_ "T10b manifest 应保留"
+python3 "$INJ" enable --proxy http://127.0.0.1:17890 --user-apps "$DT/apps" --backup-dir "$DT/backup" >/dev/null 2>&1 \
+  && grep -q '# openai-proxy-kit injected' "$DT/apps/app.desktop" \
+  && ok_ "T11 enable（按 manifest 重新注入）" || fail_ "T11 enable"
+python3 "$INJ" disable --user-apps "$DT/apps" --backup-dir "$DT/backup" >/dev/null 2>&1 \
+  && diff -q "$DT/backup/app.desktop.orig" "$DT/apps/app.desktop" >/dev/null \
+  && ok_ "T12 disable 幂等（重复停用安全）" || fail_ "T12 幂等"
+
+echo "== switch.sh / gui.py =="
+
+# T13 未安装时 switch.sh 正确拒绝
+if KIT_ENV="$WORK/nonexistent.env" bash "$KIT_ROOT/scripts/switch.sh" status >/dev/null 2>&1; then
+    fail_ "T13 switch.sh 未安装应报错"
+else
+    ok_ "T13 switch.sh 未安装时正确拒绝"
+fi
+
+# T14 gui.py headless 冒烟（需 GTK4；只 import + 只读查询，不实例化窗口）
+if python3 -c "import gi; gi.require_version('Gtk','4.0'); gi.require_version('Adw','1')" 2>/dev/null; then
+    cat > "$WORK/kit.env" <<'EOF'
+INSTALL_HOME='/tmp/kit-gui-test-home'
+MIXED_PORT='17890'
+API_PORT='19090'
+OPENAI_GROUP='测试组'
+UNIT_MIHOMO='mihomo-unit-x.service'
+UNIT_CONTROLLER='controller-x.service'
+UNIT_GUARD_TIMER='guard-x.timer'
+EOF
+    if KIT_ENV="$WORK/kit.env" python3 -c "
+import sys; sys.path.insert(0, '$KIT_ROOT/scripts')
+import gui
+assert gui.MIXED_PORT == '17890' and gui.UNITS['mihomo'] == 'mihomo-unit-x.service'
+st = gui.query_status()   # 只读: 不存在的 unit/API 端口，无副作用
+assert st['services']['mihomo'] is False
+assert st['group_now'] is None
+assert isinstance(st['nodes'], list)
+" 2>/dev/null; then
+        ok_ "T14 gui.py kit.env 解析 + 状态查询（headless 无副作用）"
+    else
+        fail_ "T14 gui.py 冒烟"
+    fi
+else
+    printf '  [SKIP] T14 无 GTK4/libadwaita，gui.py 冒烟跳过\n'
+fi
 
 echo
 if [ "$FAILED" -eq 0 ]; then

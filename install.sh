@@ -7,6 +7,8 @@
 #   ./install.sh update            # 重拉订阅重新生成配置并重启 mihomo
 #   ./install.sh controller        # 单独安装/补装上游路由熔断器
 #   ./install.sh desktop           # 单独注入桌面启动器代理
+#   ./install.sh gui               # 单独安装/补装桌面控制台（GTK4）
+#   ./install.sh start|stop|status # 一键开关（GUI 按钮背后的同一实现）
 #
 # 影子验证（不动现网、不碰 gsettings、不写真实应用目录）:
 #   INSTALL_HOME=~/.local/share/openai-proxy-kit-test \
@@ -379,10 +381,37 @@ install_desktop_inject() {
 }
 
 # ============================================================
-# 阶段 9: 冒烟验证
+# 阶段 9: 桌面控制台（GTK4，FlClash 风格一键开关窗口）
+# ============================================================
+GUI_INSTALLED=0
+install_gui() {
+    phase "阶段 9/10 桌面控制台（GTK4）"
+    if [ "$SHADOW" = "1" ]; then
+        info "影子模式: 跳过（不写真实应用目录）"
+        return
+    fi
+    if ! python3 -c "import gi; gi.require_version('Gtk','4.0'); gi.require_version('Adw','1')" 2>/dev/null; then
+        warn "缺少 GTK4/libadwaita（python3-gi），跳过 GUI。补装: sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adwaita-1"
+        warn "之后运行 ./install.sh gui 补装。CLI 一键开关不受影响: ./install.sh start|stop|status"
+        return
+    fi
+    mkdir -p "$INSTALL_HOME/scripts"
+    cp "$SCRIPT_DIR/scripts/common.sh" "$SCRIPT_DIR/scripts/switch.sh" \
+       "$SCRIPT_DIR/scripts/inject_desktop.py" "$SCRIPT_DIR/scripts/gui.py" \
+       "$INSTALL_HOME/scripts/"
+    render_template "$SCRIPT_DIR/templates/openai-proxy-kit-console.desktop.tmpl" \
+        "$USER_APPS_DIR/openai-proxy-kit-console.desktop" \
+        INSTALL_HOME="$INSTALL_HOME"
+    update-desktop-database "$USER_APPS_DIR" 2>/dev/null || true
+    GUI_INSTALLED=1
+    ok "应用菜单已添加「代理控制台」"
+}
+
+# ============================================================
+# 阶段 10: 冒烟验证
 # ============================================================
 smoke_test() {
-    phase "阶段 9/9 冒烟验证"
+    phase "阶段 10/10 冒烟验证"
     local shadow_pid=""
     if [ "$SHADOW" = "1" ]; then
         info "影子模式: 手动拉起 mihomo 做冒烟（结束即杀）"
@@ -464,7 +493,9 @@ print_summary() {
   服务         $UNIT_MIHOMO $UNIT_CONTROLLER $UNIT_GUARD_TIMER
   管理面板     http://127.0.0.1:$API_PORT/ui/
   状态文件     $KIT_ENV
-$( [ "$SHADOW" = "1" ] && echo "  ⚠ 影子模式: systemd unit 未启动，系统代理/桌面注入未执行" )
+  一键开关     ./install.sh start|stop|status
+$( [ "$GUI_INSTALLED" = "1" ] && echo "  桌面控制台   应用菜单「代理控制台」（FlClash 风格 GTK4 窗口）" )
+$( [ "$SHADOW" = "1" ] && echo "  ⚠ 影子模式: systemd unit 未启动，系统代理/桌面注入/GUI 未执行" )
   诊断工具     ./diagnose.sh
   更新订阅     ./install.sh update
   卸载         ./uninstall.sh
@@ -488,6 +519,7 @@ main() {
             install_controller || true
             write_kit_env   # 覆盖写入（含 NODE_BIN）
             install_desktop_inject
+            install_gui
             smoke_test
             print_summary
             ;;
@@ -523,8 +555,17 @@ main() {
             . "$KIT_ENV"
             IS_GNOME=1 SHADOW=0 install_desktop_inject
             ;;
+        gui)
+            [ -f "$KIT_ENV" ] || die "未安装（先跑完整 install）"
+            # shellcheck disable=SC1090
+            . "$KIT_ENV"
+            SHADOW=0 install_gui
+            ;;
+        start|stop|status)
+            exec "$SCRIPT_DIR/scripts/switch.sh" "$ACTION"
+            ;;
         *)
-            die "未知子命令: $ACTION（可用: install/update/controller/desktop）"
+            die "未知子命令: $ACTION（可用: install/update/controller/desktop/gui/start/stop/status）"
             ;;
     esac
 }

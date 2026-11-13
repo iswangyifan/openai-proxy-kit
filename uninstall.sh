@@ -42,12 +42,12 @@ if [ -f "$INSTALL_HOME/backup/desktop/manifest.json" ]; then
     python3 "$SCRIPT_DIR/scripts/inject_desktop.py" restore \
         --backup-dir "$INSTALL_HOME/backup/desktop" \
         --user-apps "$HOME/.local/share/applications" || true
-    # 工具自己生成的面板快捷方式
-    rm -f "$HOME/.local/share/applications/mihomo-panel.desktop"
-    update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
-else
-    info "无桌面注入记录，跳过"
 fi
+# 工具自己生成的快捷方式（面板入口 + GUI 控制台）
+rm -f "$HOME/.local/share/applications/mihomo-panel.desktop" \
+      "$HOME/.local/share/applications/openai-proxy-kit-console.desktop"
+update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
+[ -f "$INSTALL_HOME/backup/desktop/manifest.json" ] || info "无桌面注入记录"
 
 # ---------- 3. 系统代理（仅当指向本工具端口时才复位，避免误伤其他部署） ----------
 phase "3/5 系统代理复位"

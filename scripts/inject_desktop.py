@@ -11,6 +11,11 @@
   - 若目标 .desktop 原本就在用户目录，先备份到 backup 目录再原地修改
   - 注入/还原状态记录在 manifest.json，供 uninstall 还原
   - 幂等: 已注入（含 marker 注释）的文件跳过
+
+动作语义:
+  - inject / restore : 安装 / 卸载（restore 清空 manifest）
+  - enable / disable : 日常开关（disable 保留 manifest，enable 按 manifest 重新注入）
+    用于"一键关闭代理"时把应用还原为直连启动，之后可无损恢复
 """
 
 import argparse
@@ -127,9 +132,42 @@ def do_restore(user_apps: Path, backup_dir: Path, manifest: dict) -> int:
     return count
 
 
+def do_disable(user_apps: Path, backup_dir: Path, manifest: dict) -> int:
+    """临时停用注入（卸载代理开关用）: 删除注入版启动器，manifest 保留"""
+    count = 0
+    for target, info in list(manifest["injected"].items()):
+        t = Path(target)
+        # 只删除确认是注入版的文件，避免误删用户后续手动改过的
+        if t.is_file() and is_injected(t.read_text(encoding="utf-8")):
+            t.unlink()
+            count += 1
+            print(f"[inject_desktop] 已停用注入: {t.name}")
+        if info.get("in_place"):
+            b = Path(info["backup"])
+            if b.is_file() and not t.exists():
+                shutil.copy2(b, t)
+                print(f"[inject_desktop] 已恢复原版: {t.name}")
+    print(f"[inject_desktop] 停用完成（{count} 个，manifest 保留，enable 可恢复）")
+    return count
+
+
+def do_enable(args, user_apps: Path, backup_dir: Path, manifest: dict) -> int:
+    """恢复被 disable 停用的注入: 按 manifest 重新生成（幂等）"""
+    count = 0
+    for target, info in list(manifest["injected"].items()):
+        src = Path(info["source"])
+        if not src.is_file():
+            print(f"[inject_desktop] 跳过（源文件已不存在）: {src}")
+            continue
+        do_inject(args, src, args.proxy, user_apps, backup_dir, manifest)
+        count += 1
+    print(f"[inject_desktop] 恢复完成（{count} 个）")
+    return count
+
+
 def main():
     ap = argparse.ArgumentParser(description="openai-proxy-kit 桌面启动器代理注入器")
-    ap.add_argument("action", choices=["inject", "restore", "scan"])
+    ap.add_argument("action", choices=["inject", "restore", "scan", "enable", "disable"])
     ap.add_argument("--desktop-file", action="append", default=[],
                     help="要注入的 .desktop 文件路径（可多次指定）")
     ap.add_argument("--proxy", default="http://127.0.0.1:7890")
@@ -143,6 +181,15 @@ def main():
 
     if args.action == "restore":
         do_restore(user_apps, backup_dir, manifest)
+        return
+
+    if args.action == "disable":
+        do_disable(user_apps, backup_dir, manifest)
+        return
+
+    if args.action == "enable":
+        do_enable(args, user_apps, backup_dir, manifest)
+        save_manifest(backup_dir, manifest)
         return
 
     if args.action == "scan":
