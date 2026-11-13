@@ -1,0 +1,17 @@
+# openai-proxy-kit 规则集（由 gen_config.py 渲染组名后拼装）
+# 设计原则: 仅对 OpenAI 系域名做接管分流，其余流量保持直连/兜底组
+- DOMAIN-SUFFIX,openai.com,@OPENAI_GROUP@
+- DOMAIN-SUFFIX,chatgpt.com,@OPENAI_GROUP@
+- DOMAIN-SUFFIX,oaistatic.com,@OPENAI_GROUP@
+- DOMAIN-SUFFIX,oaiusercontent.com,@OPENAI_GROUP@
+- DOMAIN-SUFFIX,cdn.auth0.com,@OPENAI_GROUP@
+# 国内域名与地址直连
+- GEOSITE,private,DIRECT
+- GEOSITE,cn,DIRECT
+- IP-CIDR,127.0.0.0/8,DIRECT,no-resolve
+- IP-CIDR,10.0.0.0/8,DIRECT,no-resolve
+- IP-CIDR,172.16.0.0/12,DIRECT,no-resolve
+- IP-CIDR,192.168.0.0/16,DIRECT,no-resolve
+- GEOIP,CN,DIRECT,no-resolve
+# 兜底
+- MATCH,@FALLBACK_GROUP@

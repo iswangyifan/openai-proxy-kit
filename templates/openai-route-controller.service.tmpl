@@ -1,0 +1,15 @@
+[Unit]
+Description=openai-route-controller route breaker (openai-proxy-kit)
+After=mihomo.service
+Wants=mihomo.service
+
+[Service]
+Type=simple
+WorkingDirectory=@CONTROLLER_DIR@
+EnvironmentFile=@CONTROLLER_ENV@
+ExecStart=@NODE_BIN@ controller.mjs
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

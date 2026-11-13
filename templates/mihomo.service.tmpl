@@ -1,0 +1,13 @@
+[Unit]
+Description=mihomo proxy core (openai-proxy-kit)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=@MIHOMO_BIN@ -d @MIHOMO_CONF_DIR@
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

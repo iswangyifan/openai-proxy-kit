@@ -1,0 +1,9 @@
+# 运行时生成物与本地状态（生成位置在 ~ 下，此处防御性排除）
+*.env
+!templates/controller.env.tmpl
+backup/
+__pycache__/
+*.pyc
+providers/
+*.log
+*.json.tmp

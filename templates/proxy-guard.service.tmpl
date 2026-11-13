@@ -1,0 +1,6 @@
+[Unit]
+Description=restore GNOME system proxy while mihomo runs (openai-proxy-kit)
+
+[Service]
+Type=oneshot
+ExecStart=@GUARD_SCRIPT@ @KIT_ENV@

@@ -1,0 +1,39 @@
+# openai-proxy-kit 系统代理守护脚本（渲染后安装到 ~/.local/bin/）
+# 逻辑: mihomo 运行中但 GNOME 系统代理未指向本工具端口时，自动恢复
+# 实战背景: FlClash 等应用退出时会把 gsettings 代理模式改成 none 导致全断网
+
+KIT_ENV="$1"   # install.sh 渲染的 kit.env 路径
+[ -r "$KIT_ENV" ] || exit 0
+# shellcheck disable=SC1090
+. "$KIT_ENV"
+
+command -v gsettings >/dev/null 2>&1 || exit 0
+command -v systemctl >/dev/null 2>&1 || exit 0
+
+# mihomo 不在运行时绝不抢系统代理（避免把流量指到死端口）
+systemctl --user is-active --quiet mihomo.service || exit 0
+
+MODE=$(gsettings get org.gnome.system.proxy mode 2>/dev/null)
+HTTP_HOST=$(gsettings get org.gnome.system.proxy.http host 2>/dev/null)
+HTTP_PORT=$(gsettings get org.gnome.system.proxy.http port 2>/dev/null)
+
+CHANGED=0
+if [ "$MODE" != "'manual'" ]; then
+    gsettings set org.gnome.system.proxy mode 'manual'
+    CHANGED=1
+fi
+if [ "$HTTP_HOST" != "'127.0.0.1'" ] || [ "$HTTP_PORT" != "${MIXED_PORT}" ]; then
+    gsettings set org.gnome.system.proxy.http host '127.0.0.1'
+    gsettings set org.gnome.system.proxy.http port "${MIXED_PORT}"
+    gsettings set org.gnome.system.proxy.https host '127.0.0.1'
+    gsettings set org.gnome.system.proxy.https port "${MIXED_PORT}"
+    gsettings set org.gnome.system.proxy.ftp host '127.0.0.1'
+    gsettings set org.gnome.system.proxy.ftp port "${MIXED_PORT}"
+    gsettings set org.gnome.system.proxy.socks host '127.0.0.1'
+    gsettings set org.gnome.system.proxy.socks port "${MIXED_PORT}"
+    CHANGED=1
+fi
+
+if [ "$CHANGED" = "1" ]; then
+    echo "$(date '+%F %T') 已自动恢复系统代理 (原值: mode=$MODE host=$HTTP_HOST port=$HTTP_PORT → 127.0.0.1:${MIXED_PORT})" >> "${GUARD_LOG}"
+fi

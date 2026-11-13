@@ -1,0 +1,24 @@
+NOTICE — 第三方组件声明
+======================
+
+本仓库在安装时自动从上游拉取并集成以下组件（不 vendor 进本仓库源码树）:
+
+openai-route-controller
+  上游:   https://github.com/tianwdong/openai-route-controller
+  许可证: MIT — Copyright (c) 2026 Tianwen Dong
+  用途:   OpenAI 路由熔断器（候选完整路径验真 / 自动切换 / 失败回滚 / 节点隔离）
+  集成方式: install.sh 执行 `git clone --depth 1` 到
+            ~/.local/share/openai-proxy-kit/openai-route-controller/
+            并通过 EnvironmentFile 传入本工具的端口/组名参数
+  选择原因: 自研熔断状态机会重复踩上游已解决的回滚/隔离/热备/退避问题
+
+mihomo
+  上游:   https://github.com/MetaCubeX/mihomo
+  许可证: GPL-3.0（本工具仅在安装时下载其官方 release 二进制，不分发其源码，
+          也不修改其代码；用户与 mihomo 之间的许可关系由其官方发布物决定）
+  用途:   代理核心（分流 / mixed 端口 / REST API）
+
+metacubexd
+  上游:   https://github.com/MetaCubeX/metacubexd
+  许可证: MIT
+  用途:   mihomo 管理面板静态资源（external-ui）
