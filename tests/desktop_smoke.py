@@ -65,6 +65,11 @@ def check():
         assert app.window.state_title.get_text() == '代理已关闭'
         assert not app.window.power_btn.get_sensitive()
         assert app.window.stack.get_child_by_name('logs') is not None
+        app.window.apply_status(dict(gui.query_status(), phase='partial', installed=True,
+            services={'mihomo': True}, api_available=False, issues=['节点读取失败：测试错误说明']))
+        assert app.window.current_node.get_text() == '节点读取失败'
+        assert '测试错误说明' in app.window.state_detail.get_text()
+        app.window.apply_status(gui.query_status())
         capture('dashboard.png')
         app.logs.add('操作', '离线桌面测试：启动失败反馈', 'ERROR')
         app.logs.add('mihomo', '离线桌面测试：日志内容示例')

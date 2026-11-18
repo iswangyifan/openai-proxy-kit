@@ -31,12 +31,12 @@
 先取得 `.deb` 安装包，并在终端进入它实际保存的目录。`./` 表示终端当前目录，并不表示项目目录；仅克隆源码不会得到安装包。请确认 [Releases](https://github.com/iswangyifan/openai-proxy-kit/releases) 已提供附件，否则使用维护者提供的已验收安装包。
 
 ```bash
-ls -lh ./openai-proxy-kit_0.3.0_amd64.deb &&
-sudo apt install ./openai-proxy-kit_0.3.0_amd64.deb &&
+ls -lh ./openai-proxy-kit_0.3.1_amd64.deb &&
+sudo apt install ./openai-proxy-kit_0.3.1_amd64.deb &&
 openai-proxy-kit
 ```
 
-如果安装包由本项目构建生成，请在**项目根目录**执行 `sudo apt install ./dist/openai-proxy-kit_0.3.0_amd64.deb`。也可将命令中的路径替换为安装包的绝对路径。
+如果安装包由本项目构建生成，请在**项目根目录**执行 `sudo apt install ./dist/openai-proxy-kit_0.3.1_amd64.deb`。也可将命令中的路径替换为安装包的绝对路径。
 
 出现“不支持的文件”时，先检查文件是否存在；安装未成功时不会出现 `openai-proxy-kit` 命令。
 

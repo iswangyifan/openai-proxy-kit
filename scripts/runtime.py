@@ -119,6 +119,8 @@ def mihomo_get(path, timeout=2):
 
 
 def query_status():
+    # 配置可能由终端升级或另一个进程更新，长驻 GUI 不能一直沿用导入时的快照。
+    refresh_config()
     services = {key: unit_active(unit) for key, unit in UNITS.items()}
     mode = sys_proxy_mode()
     targets = [(proxy_setting(f"org.gnome.system.proxy.{kind}", "host"),
@@ -130,14 +132,27 @@ def query_status():
     owned = lease and mode == "manual" and any(host == "127.0.0.1" and port == MIXED_PORT
                                       for host, port in targets)
     group = mihomo_get("/proxies/" + urllib.parse.quote(OPENAI_GROUP, safe=""))
-    group = group if isinstance(group, dict) else {}
+    api_available = isinstance(group, dict)
+    group = group if api_available else {}
     running = services["mihomo"] and mode == "manual" and all(
         h == "127.0.0.1" and p == MIXED_PORT for h, p in targets[:2]) and bool(group.get("all"))
     phase = "on" if running else "partial" if any(services.values()) or owned else "off"
+    issues = []
+    if phase == 'partial':
+        if not services['mihomo']:
+            issues.append('代理核心未运行')
+        if services['mihomo'] and not api_available:
+            issues.append('节点读取失败，请核对管理 API 端口、密钥及代理组配置')
+        elif services['mihomo'] and not group.get('all'):
+            issues.append('当前代理组没有候选节点，请检查订阅')
+        if services['mihomo'] and (mode != 'manual' or not all(
+                h == '127.0.0.1' and p == MIXED_PORT for h, p in targets[:2])):
+            issues.append('系统代理未指向当前核心端口 ' + MIXED_PORT)
     return {"services": services, "sys_proxy": mode, "proxy_owned": owned,
             "proxy_target": " / ".join(f"{h}:{p}" for h, p in targets),
             "injected": count_injected(), "running": running, "phase": phase,
             "group_now": group.get("now"), "nodes": group.get("all", []),
+            "api_available": api_available, "issues": issues,
             "installed": bool(ENV), "checked_at": time.strftime("%H:%M:%S")}
 
 

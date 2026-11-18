@@ -217,7 +217,7 @@ EOF
     if KIT_ENV="$WORK/kit.env" python3 -c "
 import sys; sys.path.insert(0, '$KIT_ROOT/scripts')
 import gui
-assert gui.MIXED_PORT == '17890' and gui.UNITS['mihomo'] == 'mihomo-unit-x.service'
+assert gui.runtime.MIXED_PORT == '17890' and gui.UNITS['mihomo'] == 'mihomo-unit-x.service'
 st = gui.query_status()   # 只读: 不存在的 unit/API 端口，无副作用
 assert st['services']['mihomo'] is False
 assert st['group_now'] is None

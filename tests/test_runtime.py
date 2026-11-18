@@ -1,4 +1,5 @@
 import json
+import io
 import os
 import subprocess
 import sys
@@ -15,6 +16,40 @@ from gi.repository import GLib, Gio
 
 
 class RuntimeTests(unittest.TestCase):
+    def test_status_reloads_external_port_secret_and_group_changes(self):
+        requests = []
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'kit.env'
+
+            def write(port, api, group, secret):
+                path.write_text(f"STATE_VERSION='1'\nINSTALL_HOME='{tmp}'\nMIXED_PORT='{port}'\n"
+                                f"API_PORT='{api}'\nOPENAI_GROUP='{group}'\nMIHOMO_SECRET='{secret}'\n")
+
+            def opened(request, timeout):
+                requests.append((request.full_url, request.get_header('Authorization')))
+                node = 'new-node' if ':9090/' in request.full_url else 'old-node'
+                return io.StringIO(json.dumps({'all': [node], 'now': node}))
+
+            try:
+                with patch.dict(os.environ, {'KIT_ENV': str(path)}), \
+                     patch.object(runtime, 'unit_active', return_value=True), \
+                     patch.object(runtime, 'sys_proxy_mode', return_value='manual'), \
+                     patch.object(runtime, 'proxy_setting', side_effect=lambda schema, key:
+                                  '127.0.0.1' if key == 'host' else runtime.MIXED_PORT), \
+                     patch.object(runtime, 'count_injected', return_value=0), \
+                     patch.object(runtime.HTTP, 'open', side_effect=opened):
+                    write('17890', '19090', 'old-group', 'SYNTHETIC_OLD')
+                    self.assertEqual(runtime.query_status()['nodes'], ['old-node'])
+                    write('7890', '9090', 'new-group', 'SYNTHETIC_NEW')
+                    result = runtime.query_status()
+                    self.assertEqual(result['phase'], 'on')
+                    self.assertEqual(result['nodes'], ['new-node'])
+                    self.assertEqual(runtime.MIXED_PORT, '7890')
+                    self.assertEqual(requests[-1], ('http://127.0.0.1:9090/proxies/new-group',
+                                                   'Bearer SYNTHETIC_NEW'))
+            finally:
+                runtime.refresh_config()
+
     def test_switch_failure_is_returned(self):
         result = subprocess.CompletedProcess([], 7, 'detail', 'failed')
         with patch.object(runtime, 'command', return_value=result):
@@ -30,7 +65,8 @@ class RuntimeTests(unittest.TestCase):
     def status(self, core, mode='none', host='127.0.0.1', port=None, group=True):
         def setting(schema, key):
             return host if key == 'host' else port or runtime.MIXED_PORT
-        with patch.dict(runtime.ENV, {'STATE_VERSION': '1'}, clear=True), \
+        with patch.object(runtime, 'refresh_config'), \
+             patch.dict(runtime.ENV, {'STATE_VERSION': '1'}, clear=True), \
              patch.object(runtime, 'unit_active', side_effect=lambda u: core and u == runtime.UNITS['mihomo']), \
              patch.object(runtime, 'sys_proxy_mode', return_value=mode), \
              patch.object(runtime, 'proxy_setting', side_effect=setting), \
@@ -47,6 +83,11 @@ class RuntimeTests(unittest.TestCase):
         self.assertFalse(self.status(True, 'manual', host='other')['running'])
         self.assertFalse(self.status(True, 'manual', group=False)['running'])
 
+    def test_failed_node_read_is_reported_as_unavailable(self):
+        status = self.status(True, 'manual', group=False)
+        self.assertFalse(status['api_available'])
+        self.assertTrue(any('节点读取失败' in issue for issue in status['issues']))
+
     def test_external_proxy_is_not_owned(self):
         status = self.status(False, 'manual', port='1')
         self.assertFalse(status['proxy_owned'])
@@ -56,7 +97,8 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(self.status(False, 'manual')['phase'], 'partial')
 
     def test_auxiliary_process_is_not_reported_as_stopped(self):
-        with patch.object(runtime, 'unit_active', side_effect=lambda unit: unit == runtime.UNITS['controller']), \
+        with patch.object(runtime, 'refresh_config'), \
+             patch.object(runtime, 'unit_active', side_effect=lambda unit: unit == runtime.UNITS['controller']), \
              patch.object(runtime, 'sys_proxy_mode', return_value='none'), \
              patch.object(runtime, 'mihomo_get', return_value=None), \
              patch.object(runtime, 'count_injected', return_value=0):

@@ -12,7 +12,7 @@ gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
 from gi.repository import Adw, Gio, GLib, Gtk, Pango
 
-from runtime import (API_PORT, ASSETS, ENV, MIXED_PORT, OPENAI_GROUP, ROOT, SWITCH_BIN,
+from runtime import (ASSETS, ENV, ROOT, SWITCH_BIN,
                      UNITS, LogFollower, LogStore, command, delay_test, load_env,
                      mihomo_get, put_node, query_status, run_switch)
 from tray import Tray
@@ -291,7 +291,7 @@ class MainWindow(Adw.ApplicationWindow):
         self.state_pill.set_css_classes(['pill'] + (['success'] if phase == 'on' else ['warning'] if phase == 'partial' else []))
         self.state_detail.set_text('正在执行操作，请稍候。' if self.app.busy else
             '代理核心与系统代理已就绪，应用可能仍需重启。' if phase == 'on' else
-            '服务与系统代理状态不一致，请查看日志或运行诊断。' if phase == 'partial' else
+            '；'.join(status.get('issues', [])) or '服务与系统代理状态不一致，请查看日志或运行诊断。' if phase == 'partial' else
             '系统代理未由本工具接管。需要使用 AI 服务时可开启代理。')
         self.power_btn.set_child(box(Gtk.Image(icon_name='system-shutdown-symbolic'),
             Gtk.Label(label='关闭代理' if status.get('phase') in ('on', 'partial') else '开启代理'), vertical=False, spacing=8))
@@ -299,14 +299,16 @@ class MainWindow(Adw.ApplicationWindow):
         self.spinner.set_spinning(self.app.busy)
         mode = status.get('sys_proxy', 'unknown')
         self.proxy_value.set_text('已开启' if status.get('proxy_owned') else '已关闭' if mode == 'none' else '其他配置')
-        self.proxy_detail.set_text(f'127.0.0.1:{MIXED_PORT}' if status.get('proxy_owned') else
+        self.proxy_detail.set_text(f'127.0.0.1:{runtime.MIXED_PORT}' if status.get('proxy_owned') else
                                    '系统直连' if mode == 'none' else status.get('proxy_target') or mode)
         services = status.get('services', {})
         self.service_value.set_text('核心运行中' if services.get('mihomo') else '核心已停止')
         self.service_detail.set_text('自动切换：' + ('运行中' if services.get('controller') else '未运行') +
                                     '  ·  守护：' + ('运行中' if services.get('guard') else '未运行'))
-        self.current_node.set_text(status.get('group_now') or '暂无节点')
-        self.node_detail.set_text(f"{len(status.get('nodes', []))} 个候选节点 · {OPENAI_GROUP}")
+        unreadable = services.get('mihomo') and status.get('api_available') is False
+        self.current_node.set_text('节点读取失败' if unreadable else status.get('group_now') or '暂无节点')
+        self.node_detail.set_text('管理 API 未返回节点列表，见上方状态说明' if unreadable else
+                                  f"{len(status.get('nodes', []))} 个候选节点 · {runtime.OPENAI_GROUP}")
         self.apps_value.set_text(f"{status.get('injected', 0)} 个启动器已配置")
         self.checked.set_text('最近刷新 ' + status.get('checked_at', '—'))
         if not status.get('installed'):
@@ -370,7 +372,7 @@ class MainWindow(Adw.ApplicationWindow):
         self.app.task(delay_test, finished, '正在测试延迟…')
 
     def open_panel(self, *_):
-        Gtk.UriLauncher.new(f'http://127.0.0.1:{API_PORT}/ui/').launch(self, None, None, None)
+        Gtk.UriLauncher.new(f'http://127.0.0.1:{runtime.API_PORT}/ui/').launch(self, None, None, None)
 
     def configure(self, *_):
         if ENV:
@@ -392,7 +394,6 @@ class MainWindow(Adw.ApplicationWindow):
         if result.returncode == 0:
             ENV.update(load_env())
             runtime.refresh_config()
-            globals().update({key: getattr(runtime, key) for key in ('API_PORT', 'MIXED_PORT', 'OPENAI_GROUP')})
             self.toast('配置完成')
 
     def reset_integration(self, *_):
@@ -410,7 +411,6 @@ class MainWindow(Adw.ApplicationWindow):
                 self.app.record_result(result, '恢复用户集成')
                 if result.returncode == 0:
                     runtime.refresh_config()
-                    globals().update({key: getattr(runtime, key) for key in ('API_PORT', 'MIXED_PORT', 'OPENAI_GROUP')})
                     self.toast('已恢复，私有配置和备份保留')
             self.app.task(lambda: command([sys.executable, str(ROOT / 'scripts/package_cleanup.py'), '--yes', '--keep-gui'], timeout=120), finished, '正在恢复用户集成…')
         dialog.connect('response', response)

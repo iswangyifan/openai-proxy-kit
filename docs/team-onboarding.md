@@ -7,9 +7,9 @@
 1. 从本项目维护者的 GitHub Release 下载 `.deb` 与 `SHA256SUMS`。在下载目录执行：
 
    ```bash
-   ls -lh ./openai-proxy-kit_0.3.0_amd64.deb ./SHA256SUMS &&
+   ls -lh ./openai-proxy-kit_0.3.1_amd64.deb ./SHA256SUMS &&
    sha256sum --check --ignore-missing SHA256SUMS &&
-   sudo apt install ./openai-proxy-kit_0.3.0_amd64.deb
+   sudo apt install ./openai-proxy-kit_0.3.1_amd64.deb
    ```
 
    应看到已下载 `.deb` 的校验结果为 `OK`。哈希用于完整性校验，目前不是独立数字签名。
@@ -27,6 +27,7 @@
 - GUI 电源按钮或托盘菜单启停；终端也可执行 `openai-proxy-kit start`、`stop`、`status`。
 - 访问公司内网异常时先关闭代理，确认直连状态。默认非 OpenAI 目标直连，但没有承诺兼容所有企业 DNS、VPN 或内网站点。
 - “已开启”表示代理服务与系统设置就绪，不保证账号登录、节点出口或模型服务一定可用。失败时先查看日志、检查可信订阅及节点。
+- “需检查”表示核心、系统代理或节点读取没有全部就绪，仪表盘会显示具体原因。“节点读取失败”表示管理 API 未返回列表，不等于订阅没有节点；端口、密钥或组名从外部更新后，界面会在下一轮刷新时读取新配置。
 - GNOME 没有托盘时仍可使用窗口；可通过系统软件源安装 AppIndicator 扩展，并在扩展管理器中启用。不要为了托盘功能安装来源不明的扩展。
 - 当前开启/关闭同时启用/取消服务自启动，尚无独立的自启动开关。
 
