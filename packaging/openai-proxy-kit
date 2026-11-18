@@ -8,6 +8,7 @@ case "${1:-gui}" in
     configure) exec bash "$APP_DIR/install.sh" ;;
     upgrade) exec bash "$APP_DIR/install.sh" controller ;;
     update) exec bash "$APP_DIR/install.sh" update ;;
+    sites) shift; exec /usr/bin/python3 "$APP_DIR/scripts/websites.py" "$@" ;;
     diagnose) shift; exec bash "$APP_DIR/diagnose.sh" "$@" ;;
     logs) shift; exec /usr/bin/python3 "$APP_DIR/scripts/runtime.py" "$@" ;;
     gui) [ "$#" -eq 0 ] || shift; exec /usr/bin/python3 "$APP_DIR/scripts/gui.py" "$@" ;;

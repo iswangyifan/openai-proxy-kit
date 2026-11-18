@@ -145,7 +145,7 @@ class CurlProbe:
         for index, endpoint in enumerate(self.endpoints):
             with tempfile.TemporaryDirectory(prefix='opk-probe-') as temporary:
                 body = Path(temporary) / 'body'
-                command = [self.executable, '--silent', '--show-error', '--proxy', proxy, '--noproxy', '',
+                command = [self.executable, '-q', '--silent', '--show-error', '--proxy', proxy, '--noproxy', '',
                            '--proto', '=https', '--connect-timeout', '4', '--max-time', str(self.timeout),
                            '--max-filesize', '524288', '--output', str(body), '--write-out', '%{http_code}', endpoint]
                 try:

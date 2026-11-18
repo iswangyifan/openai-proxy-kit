@@ -25,6 +25,7 @@ from pathlib import Path
 
 import yaml
 from route_model import ordered_nodes, write_probe_map
+from websites import load_profile, merge_rules
 
 PROBE_LISTEN_HOST = "127.0.0.1"
 GENERATED_HEADER = (
@@ -145,6 +146,12 @@ def build_config(proxies: list[dict], openai_names: list[str], args) -> dict:
                   .replace("@OPENAI_GROUP@", args.openai_group)
                   .replace("@FALLBACK_GROUP@", "漏网之鱼"))
     config["rules"] = yaml.safe_load(rules_text)
+    settings = getattr(args, 'website_settings', None)
+    if settings and Path(settings).is_file():
+        if Path(settings).with_name('website-routing.pending.json').exists():
+            die('上次网站设置未完成，请先在代理网站页重新保存以恢复')
+        profile = load_profile(settings)
+        merge_rules(config, profile, args.openai_group, profile)
 
     # --- probe listeners: 按本项目共享顺序生成私有探测入口 ---
     listeners = []
@@ -168,6 +175,7 @@ def main():
     ap.add_argument("--out", required=True, help="输出 mihomo 配置文件路径")
     ap.add_argument("--templates-dir", default=None,
                     help="模板目录（默认取脚本同级 ../templates）")
+    ap.add_argument('--website-settings', help='用户私有代理网站设置文件')
     ap.add_argument("--mixed-port", type=int, default=7890)
     ap.add_argument("--api-port", type=int, default=9090)
     ap.add_argument("--dns-port", type=int, default=1053)

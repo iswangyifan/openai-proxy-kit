@@ -15,15 +15,15 @@ Ubuntu 24.04 / GNOME / amd64，Python 3.12、GTK4 ≥4.10、libadwaita ≥1.4。
 从 [GitHub Releases](https://github.com/iswangyifan/openai-proxy-kit/releases) 下载软件包和 SHA256SUMS，在下载所在目录执行：
 
 ```bash
-ls -lh ./openai-proxy-kit_0.3.1_amd64.deb ./SHA256SUMS &&
+ls -lh ./openai-proxy-kit_0.4.0_amd64.deb ./SHA256SUMS &&
 sha256sum --ignore-missing -c SHA256SUMS &&
-sudo apt install ./openai-proxy-kit_0.3.1_amd64.deb &&
+sudo apt install ./openai-proxy-kit_0.4.0_amd64.deb &&
 openai-proxy-kit
 ```
 
-SHA256 检查完整性，不代表独立数字签名。路径必须指向实际下载文件；出现“不支持的文件”时先运行 `ls -l ./openai-proxy-kit_0.3.1_amd64.deb` 检查位置。
+SHA256 检查完整性，不代表独立数字签名。路径必须指向实际下载文件；出现“不支持的文件”时先运行 `ls -l ./openai-proxy-kit_0.4.0_amd64.deb` 检查位置。
 
-`./` 是终端当前目录。源码仓库不包含 `.deb`；如果是自行构建，在项目根目录使用 `sudo apt install ./dist/openai-proxy-kit_0.3.1_amd64.deb`。也可直接使用安装包的绝对路径。安装失败时请先解决错误，再运行应用命令。
+`./` 是终端当前目录。源码仓库不包含 `.deb`；如果是自行构建，在项目根目录使用 `sudo apt install ./dist/openai-proxy-kit_0.4.0_amd64.deb`。也可直接使用安装包的绝对路径。安装失败时请先解决错误，再运行应用命令。
 
 首次配置输入可信 Clash YAML 订阅，核对页面的系统改动和可选启动器适配后启动。GUI 默认不适配任何应用；开启可选适配时会显示候选应用并保留现有用户参数。服务启停同时启用/取消登录自启动，独立自启设置尚未实现。已开启意图会在核心重启时核验端口后恢复；遇到其他手动/PAC代理则保留其设置。
 
@@ -41,7 +41,7 @@ openai-proxy-kit upgrade   # 旧配置迁移到随机 API 密钥与新守护
 openai-proxy-kit reset     # 恢复用户集成，保留私有配置和备份
 ```
 
-默认仅明确列出的 OpenAI 相关域名走代理，其余直连；不启用 TUN、不修改系统 DNS、不下载 GeoIP/GeoSite。内网登录、企业 DNS 和 VPN 兼容性仍取决于环境；需要时关闭代理。
+默认 OpenAI 相关域名走代理，可在“代理网站”中添加 GitHub、YouTube 和自定义域名，其余直连；不启用 TUN、不修改系统 DNS、不下载 GeoIP/GeoSite。设置保存于安装数据目录的 `website-routing.json`，不需要修改安装目录模板，更新订阅和升级后保留。详情见[代理网站与检测说明](website-routing.md)。内网登录、企业 DNS 和 VPN 兼容性仍取决于环境；需要时关闭代理。
 
 关闭会逐协议恢复接管前的设置，保留其他程序后续修改的目标；因此原先配置了其他代理时，恢复结果也可能是该代理。已经运行的应用环境变量不会被改写，需要完全退出后重开。
 

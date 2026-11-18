@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """GTK4 控制台：仪表盘、节点、实时日志、托盘及首次配置。"""
 import os
+import json
 import sys
 import threading
 import runtime
@@ -88,6 +89,7 @@ class MainWindow(Adw.ApplicationWindow):
         self.overlay.set_child(box(self.sidebar, toolbar, vertical=False, spacing=0))
         self._overview_page()
         self._nodes_page()
+        self._websites_page()
         self._logs_page()
         self._tools_page()
         self.show_page('overview')
@@ -105,8 +107,9 @@ class MainWindow(Adw.ApplicationWindow):
         brand = box(logo, box(label('Proxy Kit', 'brand'), label('Codex / ChatGPT', 'brand-note'), spacing=3),
                     vertical=False, spacing=10)
         self.nav = Gtk.ListBox(selection_mode=Gtk.SelectionMode.SINGLE, vexpand=True)
-        self.pages = ['overview', 'nodes', 'logs', 'tools']
+        self.pages = ['overview', 'nodes', 'websites', 'logs', 'tools']
         for name, icon in [('仪表盘', 'view-grid-symbolic'), ('代理节点', 'network-server-symbolic'),
+                           ('代理网站', 'web-browser-symbolic'),
                            ('实时日志', 'utilities-terminal-symbolic'), ('工具与设置', 'preferences-system-symbolic')]:
             row = Gtk.ListBoxRow()
             row.set_child(box(Gtk.Image(icon_name=icon), label(name), vertical=False, spacing=12))
@@ -191,11 +194,131 @@ class MainWindow(Adw.ApplicationWindow):
         page.append(self.log_scroll)
         page.append(label('仅保留最近 1200 条。离开日志页或隐藏窗口会停止读取；清空视图不删除系统日志。', 'detail', True))
 
+    def _websites_page(self):
+        page = self._page('websites', '代理网站', '选择哪些网站使用代理，其余流量保持直连。')
+        self.site_dirty, self.site_loading, self.website_checked_node = False, False, None
+        self.website_switches, self.website_results = {}, {}
+        rows = []
+        for key, title, detail in (
+                ('openai', 'OpenAI / ChatGPT', '默认启用；自动选节点仍以 OpenAI 探测为依据。'),
+                ('github', 'GitHub', '网页、API、代码资源、发布下载与 GitHub Pages。'),
+                ('youtube', 'YouTube', '网页、视频和图片资源；不代理全部 Google 服务。')):
+            result = label('未检测', 'detail', True)
+            result.set_size_request(170, -1)
+            self.website_results[key] = result
+            if key == 'openai':
+                control = label('始终启用', 'pill')
+            else:
+                control = Gtk.Switch(valign=Gtk.Align.CENTER)
+                control.set_tooltip_text(title + ' 使用代理')
+                control.update_property([Gtk.AccessibleProperty.LABEL], [title + ' 使用代理'])
+                control.connect('notify::active', self._site_edited)
+                self.website_switches[key] = control
+            text = box(label(title, 'section-title'), label(detail, 'detail', True), spacing=5, hexpand=True)
+            rows.append(box(text, result, control, vertical=False, spacing=16))
+        page.append(card('网站分流', 'web-browser-symbolic', *rows,
+            label('这些网站共用“代理节点”页中的当前节点。保存后只影响新连接，已经打开的页面可能需要重新加载。', 'detail', True)))
+        self.website_domains = Gtk.TextView(wrap_mode=Gtk.WrapMode.WORD_CHAR, monospace=True,
+                                           top_margin=12, bottom_margin=12, left_margin=12, right_margin=12)
+        self.website_domains.set_tooltip_text('每行一个公开域名，包含其子域；不含协议、路径、IP 或通配符')
+        self.website_domains.update_property([Gtk.AccessibleProperty.LABEL], ['自定义代理域名，每行一个'])
+        self.website_domains.get_buffer().connect('changed', self._site_edited)
+        page.append(card('自定义域名', 'document-edit-symbolic',
+            label('每行一个，例如 example.com。子域名会一并匹配；不要填写 https://、端口、路径或公司内网域名。', 'detail', True),
+            Gtk.ScrolledWindow(child=self.website_domains, min_content_height=110,
+                               hscrollbar_policy=Gtk.PolicyType.NEVER),
+            label('设置保存在你的用户目录，更新订阅和升级软件后继续保留。', 'detail', True)))
+        self.website_save = button('保存并应用', self.save_sites, 'document-save-symbolic', 'power')
+        self.website_check = button('检测已启用网站', self.check_sites, 'network-transmit-symbolic')
+        self.sites_message = label('', 'detail', True)
+        footer = box(box(self.website_save, self.website_check, vertical=False, spacing=12),
+            self.sites_message,
+            label('检测只验证公开端点，不登录、不播放视频、不切换节点。自定义域名请自行访问验证。', 'detail', True),
+            spacing=6, margin_start=28, margin_end=28, margin_top=10, margin_bottom=12)
+        scroller = self.stack.get_child_by_name('websites')
+        self.stack.remove(scroller)
+        view = Adw.ToolbarView()
+        view.set_content(scroller)
+        view.add_bottom_bar(footer)
+        self.stack.add_named(view, 'websites')
+        self.reload_site_profile()
+
+    def reload_site_profile(self):
+        self.site_loading = True
+        try:
+            profile = runtime.website_profile()
+            for key, control in self.website_switches.items():
+                control.set_active(key in profile['enabled'])
+            self.website_domains.get_buffer().set_text('\n'.join(profile['domains']))
+            self.site_dirty = False
+            self.sites_message.set_text('可先保存网站设置，完成订阅配置后生效。' if not ENV else '未勾选的预设不会自动添加域名；自定义域名独立生效。开启代理后可检测。')
+        except (OSError, ValueError):
+            self.sites_message.set_text('网站设置读取失败，请检查私有配置或备份后重试。')
+        finally:
+            self.site_loading = False
+
+    def _site_edited(self, *_):
+        if self.site_loading:
+            return
+        self.site_dirty = True
+        self.website_check.set_sensitive(False)
+        self.website_checked_node = None
+        self.sites_message.set_text('修改尚未保存。保存后再检测网站。')
+        for result in self.website_results.values():
+            result.set_text('未检测')
+
+    def save_sites(self, *_):
+        from websites import normalize
+        buffer = self.website_domains.get_buffer()
+        domains = buffer.get_text(buffer.get_start_iter(), buffer.get_end_iter(), True)
+        try:
+            profile = normalize({'enabled': [k for k, c in self.website_switches.items() if c.get_active()],
+                                 'domains': [line for line in domains.splitlines() if line.strip()]})
+        except ValueError as exc:
+            self.sites_message.set_text(str(exc))
+            self.toast('请检查域名格式')
+            return
+
+        def finished(result):
+            self.app.record_result(result, '保存代理网站')
+            if result.returncode:
+                self.sites_message.set_text('保存失败，请查看日志；恢复未完成时可重新保存以重试恢复。')
+                return
+            self.reload_site_profile()
+            details = json.loads(result.stdout)
+            self.sites_message.set_text('已保存并应用到当前代理。' if details['live'] else
+                                       '已保存，开启代理后生效。' if details['configured'] else '已保存，完成订阅配置后生效。')
+            self.website_checked_node = None
+            for value in self.website_results.values():
+                value.set_text('未检测')
+        self.app.task(lambda: runtime.save_websites(profile), finished, '正在保存代理网站…')
+
+    def check_sites(self, *_):
+        def work():
+            try:
+                return runtime.check_websites()
+            except Exception as exc:
+                return {'error': runtime.redact(str(exc))}
+
+        def finished(results):
+            if 'error' in results:
+                for value in self.website_results.values():
+                    value.set_text('检测未完成')
+                self.sites_message.set_text(results['error'])
+                return
+            for key, value in results.items():
+                self.website_results[key].set_text(value['detail'])
+            self.website_checked_node = self.app.status.get('group_now')
+            self.sites_message.set_text('检测完成。公开端点可达不代表账号登录、完整下载或视频播放一定成功。')
+        for key, value in self.website_results.items():
+            value.set_text('检测中…' if key == 'openai' or self.website_switches[key].get_active() else '预设未启用')
+        self.app.task(work, finished, '正在检测网站公开端点…')
+
     def _tools_page(self):
         page = self._page('tools', '工具与设置', '首次配置、链路诊断与窗口行为。')
         self.subscription = Gtk.PasswordEntry(show_peek_icon=True, hexpand=True, placeholder_text='输入 Clash YAML 订阅地址')
         self.configure_btn = button('配置并开启代理', self.configure, 'network-connect-symbolic', 'power')
-        self.setup_note = label('将创建用户服务、开启登录自启，并设置 GNOME HTTP/HTTPS 代理；关闭时恢复原设置。仅 OpenAI 相关域名走代理。', 'detail', True)
+        self.setup_note = label('将创建用户服务、开启登录自启，并设置 GNOME HTTP/HTTPS 代理；关闭时恢复原设置。默认 OpenAI 走代理，可在“代理网站”中增加目标。', 'detail', True)
         page.append(card('代理配置', 'document-properties-symbolic', self.setup_note,
             self.subscription,
             label('请使用你有权管理的设备和网络，并遵守组织网络政策。本项目与 OpenAI 无隶属或背书关系。', 'detail', True),
@@ -221,6 +344,9 @@ class MainWindow(Adw.ApplicationWindow):
         self.nav.select_row(self.nav.get_row_at_index(self.pages.index(name)))
 
     def _page_changed(self, *_):
+        if (self.stack.get_visible_child_name() == 'websites' and hasattr(self, 'website_save')
+                and not self.site_dirty and not self.app.busy):
+            self.reload_site_profile()
         if hasattr(self, 'follow_switch'):
             self._follow_changed()
 
@@ -325,6 +451,15 @@ class MainWindow(Adw.ApplicationWindow):
             self.subscription.set_property('placeholder-text', '输入 Clash YAML 订阅地址')
             self.setup_note.set_text('复用已有端口与服务名，切换到软件包内置的控制器。核心关闭时不会为了升级而开启代理。')
         self.diagnose_btn.set_sensitive(not self.app.busy)
+        self.website_save.set_sensitive(not self.app.busy)
+        self.website_check.set_sensitive(not self.app.busy and not self.site_dirty and status.get('running', False))
+        self.website_domains.set_editable(not self.app.busy)
+        for control in self.website_switches.values():
+            control.set_sensitive(not self.app.busy)
+        if self.website_checked_node and self.website_checked_node != status.get('group_now'):
+            for value in self.website_results.values():
+                value.set_text('节点已变更，请重新检测')
+            self.website_checked_node = None
         ui = Path(ENV.get('MIHOMO_CONF_DIR', Path.home() / '.config/mihomo')) / 'ui'
         self.panel_btn.set_sensitive(bool(status.get('running')) and (ui / 'index.html').is_file())
         self._update_nodes(status)

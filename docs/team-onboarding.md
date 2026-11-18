@@ -1,6 +1,6 @@
 # 新用户上手教程：从下载安装到日常使用
 
-适用于 **openai-proxy-kit 0.3.1、Ubuntu 24.04 / GNOME / amd64**。GNOME 是桌面环境，amd64 对应常见 Intel / AMD 64 位电脑。其他系统与桌面暂未验收。
+适用于 **openai-proxy-kit 0.4.0、Ubuntu 24.04 / GNOME / amd64**。GNOME 是桌面环境，amd64 对应常见 Intel / AMD 64 位电脑。其他系统与桌面暂未验收。
 
 第一次使用，请按第 1～6 步完成。已经看到灰色订阅框和“升级内置控制器”按钮的用户，先看[第 7 步](#第-7-步已有配置如何更新或更换订阅)。
 
@@ -26,7 +26,7 @@
 
 打开维护者提供的 [GitHub Releases](https://github.com/iswangyifan/openai-proxy-kit/releases) 下载页面，下载以下两个文件到**同一个文件夹**：
 
-- `openai-proxy-kit_0.3.1_amd64.deb`：软件安装包。
+- `openai-proxy-kit_0.4.0_amd64.deb`：软件安装包。
 - `SHA256SUMS`：与本次安装包配套的校验文件。
 
 如果提供的是更新版本，后续命令中的文件名也要替换成实际版本。
@@ -54,7 +54,7 @@
 3. 在终端执行下面的检查命令：
 
    ```bash
-   ls -lh ./openai-proxy-kit_0.3.1_amd64.deb ./SHA256SUMS
+   ls -lh ./openai-proxy-kit_0.4.0_amd64.deb ./SHA256SUMS
    ```
 
 应该能看到两个文件的文件信息。如果提示“没有那个文件或目录”，先回到文件管理器确认保存位置，不要继续安装。
@@ -74,7 +74,7 @@ sha256sum --check --ignore-missing SHA256SUMS
 ### 2.3 执行安装
 
 ```bash
-sudo apt install ./openai-proxy-kit_0.3.1_amd64.deb
+sudo apt install ./openai-proxy-kit_0.4.0_amd64.deb
 ```
 
 1. 输入当前 Ubuntu 用户的 sudo 密码；输入时终端通常不显示字符，输入完按 Enter。
@@ -84,7 +84,7 @@ sudo apt install ./openai-proxy-kit_0.3.1_amd64.deb
 如果安装包是维护者在源码目录构建的，应在**项目根目录**使用：
 
 ```bash
-sudo apt install ./dist/openai-proxy-kit_0.3.1_amd64.deb
+sudo apt install ./dist/openai-proxy-kit_0.4.0_amd64.deb
 ```
 
 也可以使用安装包的绝对路径；不要把别人的电脑路径原样复制到自己电脑上。
@@ -117,6 +117,7 @@ command -v openai-proxy-kit
 | --- | --- |
 | 仪表盘 | 看代理是否开启、后台服务、当前节点和应用适配状态。 |
 | 代理节点 | 查看候选节点、切换当前节点、测试延迟。 |
+| 代理网站 | 勾选 GitHub、YouTube，添加自定义域名，保存并检测。 |
 | 实时日志 | 查看配置、服务、启停及诊断结果。 |
 | 工具与设置 | 首次填写订阅、运行诊断、恢复集成及设置窗口行为。 |
 
@@ -193,6 +194,19 @@ command -v openai-proxy-kit
 
 **本步完成标志：** 可以看到当前节点；如手动选择其他节点，能得到切换结果。
 
+### 5.1 增加 GitHub、YouTube 或其他网站
+
+1. 点击左侧 **代理网站**。
+2. 打开 GitHub 或 YouTube 旁的开关。OpenAI / ChatGPT 保持默认启用。
+3. 如需其他网站，在“自定义域名”中每行填写一个域名，例如 `example.com`。不要填 `https://`、端口、路径、IP 或 `*`，子域名会自动覆盖。
+4. 点击 **保存并应用**，等待页面显示保存结果。设置不会因更新订阅或升级软件而丢失。
+5. 代理开启时，可点击 **检测已启用网站**，分别查看公开端点结果。尚未配置订阅或代理关闭时，可以先保存，开启后再检测。
+6. 回到目标应用验证，已经打开的网页或连接可能需要刷新。
+
+![代理网站：勾选 GitHub、YouTube，输入自定义域名并保存](images/websites.png)
+
+各网站共用当前节点。检测不触发节点切换，也不保证登录或视频播放一定成功；自定义域名需自行访问验证。该规则只作用于进入本工具代理的流量，SSH 或未使用系统代理的终端应用不会被自动接管。详细范围见[代理网站说明](website-routing.md)。
+
 ## 第 6 步：使用应用、日常启停与退出
 
 ### 6.1 使用 Codex、VSCode 或 ChatGPT
@@ -228,7 +242,7 @@ openai-proxy-kit start
 openai-proxy-kit stop
 ```
 
-默认只有指定的 OpenAI 相关目标走代理，其余直连；企业 DNS、VPN 和内网站点的兼容性仍取决于实际环境，需要时关闭代理。
+默认只有指定的 OpenAI 相关目标走代理；“代理网站”中新增的目标也会走代理，其余直连。企业 DNS、VPN 和内网站点的兼容性仍取决于实际环境，需要时关闭代理。
 
 关闭会恢复接管前的设置。如果原来有其他代理，恢复结果可能仍是原来的代理。已经运行的应用环境变量也需要通过完全退出、重新打开来更新。
 

@@ -6,6 +6,7 @@ import re
 import selectors
 import signal
 import subprocess
+import sys
 import threading
 import time
 import urllib.parse
@@ -58,12 +59,14 @@ def refresh_config():
     GUARD_SERVICE = ENV.get('UNIT_GUARD_SERVICE', 'proxy-guard-kit.service')
 
 
-def command(args, timeout=8, **kwargs):
+def command(args, timeout=8, input_text=None, **kwargs):
     try:
+        if input_text is not None:
+            kwargs['stdin'] = subprocess.PIPE
         with subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                               start_new_session=True, **kwargs) as process:
             try:
-                out, error = process.communicate(timeout=timeout)
+                out, error = process.communicate(input=input_text, timeout=timeout)
             except subprocess.TimeoutExpired:
                 try:
                     os.killpg(process.pid, signal.SIGTERM)
@@ -158,6 +161,23 @@ def query_status():
 
 def run_switch(on):
     return command(["bash", SWITCH_BIN, "start" if on else "stop"], timeout=75)
+
+
+def website_profile():
+    from websites import current_profile
+    return current_profile(dict(ENV))
+
+
+def save_websites(profile):
+    state = os.environ.get('KIT_ENV', str(Path.home() / '.local/share/openai-proxy-kit/kit.env'))
+    return command([sys.executable, str(ROOT / 'scripts/websites.py'), '--state', state, '--apply'],
+                   input_text=json.dumps(profile, ensure_ascii=False), timeout=90)
+
+
+def check_websites():
+    from websites import probe_services, current_profile
+    env = dict(ENV)
+    return probe_services(env, current_profile(env))
 
 
 def put_node(node):

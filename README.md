@@ -23,6 +23,7 @@
 - **首次配置与旧部署适配**：GUI 输入订阅进行配置；已有安装可切换到内置控制器，复用原有端口与 unit 名。
 - **桌面应用适配**：为选定应用的用户级启动器配置代理环境变量，支持停用和恢复。
 - **链路诊断**：检查服务、端口、代理组、连通性、系统代理与指定进程环境变量。
+- **代理网站**：按需勾选 GitHub、YouTube，添加自定义域名；设置随用户保存，并可检测各预设的公开端点。
 
 [实时日志预览](docs/images/logs.png) · [深色节点页预览](docs/images/nodes-dark.png)
 
@@ -35,12 +36,12 @@
 先取得 `.deb` 安装包，并在终端进入它实际保存的目录。`./` 表示终端当前目录，并不表示项目目录；仅克隆源码不会得到安装包。请确认 [Releases](https://github.com/iswangyifan/openai-proxy-kit/releases) 已提供附件，否则使用维护者提供的已验收安装包。
 
 ```bash
-ls -lh ./openai-proxy-kit_0.3.1_amd64.deb &&
-sudo apt install ./openai-proxy-kit_0.3.1_amd64.deb &&
+ls -lh ./openai-proxy-kit_0.4.0_amd64.deb &&
+sudo apt install ./openai-proxy-kit_0.4.0_amd64.deb &&
 openai-proxy-kit
 ```
 
-如果安装包由本项目构建生成，请在**项目根目录**执行 `sudo apt install ./dist/openai-proxy-kit_0.3.1_amd64.deb`。也可将命令中的路径替换为安装包的绝对路径。
+如果安装包由本项目构建生成，请在**项目根目录**执行 `sudo apt install ./dist/openai-proxy-kit_0.4.0_amd64.deb`。也可将命令中的路径替换为安装包的绝对路径。
 
 出现“不支持的文件”时，先检查文件是否存在；安装未成功时不会出现 `openai-proxy-kit` 命令。
 
@@ -59,7 +60,7 @@ openai-proxy-kit diagnose       # 链路诊断
 
 ## 使用边界
 
-- 默认仅明确列出的 OpenAI 相关域名走代理，其余直连；不启用 TUN、不修改系统 DNS，也不保证所有企业内网/VPN 环境兼容。
+- 默认 OpenAI 相关域名走代理；可在“代理网站”增加 GitHub、YouTube 或自定义域名，其余直连。不启用 TUN、不修改系统 DNS，也不保证所有企业内网/VPN 环境兼容。
 - 启停修改启动器配置，不会更新已经运行的应用进程；VSCode / ChatGPT 可能需要完全退出后重新启动。
 - 当前 `start` 同时设置服务自启动，`stop` 同时取消服务自启动；独立自启动设置仍在规划中。
 - 节点延迟和路径探测不能保证账号登录或业务请求成功。

@@ -163,6 +163,7 @@ gen_mihomo_config() {
     local out_tmp="$MIHOMO_CONF_DIR/config.yaml.new"
     SUB_URL="$SUB_URL" MIHOMO_SECRET="$MIHOMO_SECRET" python3 "$SCRIPT_DIR/scripts/gen_config.py" \
         --out "$out_tmp" \
+        --website-settings "$INSTALL_HOME/website-routing.json" \
         --mixed-port "$MIXED_PORT" --api-port "$API_PORT" --dns-port "$DNS_PORT" \
         --probe-port-base "$PROBE_PORT_BASE" --openai-group "$OPENAI_GROUP" \
         --max-nodes "$MAX_NODES" --mihomo-bin "$MIHOMO_BIN" \
@@ -184,7 +185,7 @@ gen_mihomo_config() {
 # ============================================================
 install_geodata() {
     mkdir -p "$MIHOMO_CONF_DIR"
-    info "仅 OpenAI 域名分流，无需下载公共数据库或第三方网页面板"
+    info "按代理网站设置分流，无需下载公共数据库或第三方网页面板"
 }
 
 # ============================================================
@@ -537,7 +538,7 @@ PYMAP
             fi
             if [ -f "$MIHOMO_CONF_DIR/config.yaml" ]; then
                 export MIHOMO_SECRET
-                python3 "$SCRIPT_DIR/scripts/secure_config.py" "$MIHOMO_CONF_DIR/config.yaml"
+                INSTALL_HOME="$INSTALL_HOME" OPENAI_GROUP="$OPENAI_GROUP" python3 "$SCRIPT_DIR/scripts/secure_config.py" "$MIHOMO_CONF_DIR/config.yaml"
             fi
             write_kit_env
             IS_GNOME=0; is_gnome && IS_GNOME=1 || true

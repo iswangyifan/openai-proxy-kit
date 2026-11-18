@@ -16,6 +16,12 @@ from gi.repository import GLib, Gio
 
 
 class RuntimeTests(unittest.TestCase):
+    def test_command_can_send_private_payload_through_stdin(self):
+        result = runtime.command([sys.executable, '-c', 'import sys; print(sys.stdin.read())'],
+                                 input_text='SYNTHETIC_STDIN')
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout.strip(), 'SYNTHETIC_STDIN')
+
     def test_status_reloads_external_port_secret_and_group_changes(self):
         requests = []
         with tempfile.TemporaryDirectory() as tmp:

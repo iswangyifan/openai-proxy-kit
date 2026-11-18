@@ -15,5 +15,7 @@ providers/
 config.yaml*
 *.pre-auth
 *.removed-*
+website-routing.json
+website-routing.pending.json
 *.pem
 *.key

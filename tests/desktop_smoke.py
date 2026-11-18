@@ -2,12 +2,16 @@
 import ctypes
 import ctypes.util
 import os
+import json
 import sys
+import tempfile
 from pathlib import Path
 
 APP_ROOT = Path(os.environ.get('OPK_TEST_APP_ROOT', Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(APP_ROOT / 'scripts'))
-os.environ['KIT_ENV'] = str(Path(__file__).resolve().parents[1] / '.artifacts/desktop-uninstalled.env')
+fixture_home = tempfile.TemporaryDirectory(prefix='opk-desktop-')
+os.environ['HOME'] = fixture_home.name
+os.environ['KIT_ENV'] = str(Path(fixture_home.name) / '.local/share/openai-proxy-kit/kit.env')
 import gui
 from gi.repository import Adw, Gio, GLib
 
@@ -112,6 +116,80 @@ def dark_check():
         app.window.apply_status(gui.query_status())
         assert not app.window.subscription.get_sensitive()
         assert app.window.configure_btn.get_child().get_last_child().get_text() == '升级内置控制器'
+        gui.ENV.clear()
+        gui.runtime.refresh_config()
+        app.style.set_color_scheme(Adw.ColorScheme.FORCE_LIGHT)
+        app.window.show_page('websites')
+        app.window.website_switches['github'].set_active(True)
+        app.window.website_domains.get_buffer().set_text(' EXTRA.example. ')
+        assert app.window.site_dirty
+        app.window.website_save.emit('clicked')
+        GLib.timeout_add(200, website_saved)
+    except Exception as exc:
+        errors.append(exc)
+        app.quit()
+    return False
+
+
+def website_saved():
+    if app.busy:
+        return True
+    try:
+        profile = Path(fixture_home.name) / '.local/share/openai-proxy-kit/website-routing.json'
+        assert profile.exists(), '保存按钮必须写入真实的私有设置文件'
+        assert profile.stat().st_mode & 0o777 == 0o600
+        value = json.loads(profile.read_text())
+        assert value['enabled'] == ['github'] and value['domains'] == ['extra.example']
+        assert not app.window.site_dirty
+        assert not app.window.website_check.get_sensitive(), '配置订阅前不可检测'
+        assert app.window.stack.get_visible_child_name() == 'websites'
+        app.paintable = gui.Gtk.WidgetPaintable.new(app.window)
+        app.window.set_default_size(1080, 740)
+        app.window.present()
+        app.window.queue_draw()
+        GLib.timeout_add(400, website_capture)
+    except Exception as exc:
+        errors.append(exc)
+        app.quit()
+    return False
+
+
+def website_capture():
+    try:
+        assert app.window.stack.get_visible_child_name() == 'websites'
+        capture('websites.png')
+        profile = Path(fixture_home.name) / '.local/share/openai-proxy-kit/website-routing.json'
+        before = profile.read_bytes()
+        app.window.website_domains.get_buffer().set_text('https://example.com/path')
+        app.window.website_save.emit('clicked')
+        assert '第 1 行' in app.window.sites_message.get_text()
+        assert profile.read_bytes() == before, '无效输入不得覆盖已保存设置'
+        app.window.reload_site_profile()
+        active = dict(gui.query_status(), running=True, phase='on', installed=True, group_now='示例节点 A')
+        gui.query_status = lambda: active
+        app.status = active
+        app._publish()
+        gui.runtime.check_websites = lambda: {
+            'openai': {'ok': True, 'detail': '公开端点可达'},
+            'github': {'ok': False, 'detail': 'HTTP 403 或响应不符合预期'},
+            'youtube': {'ok': None, 'detail': '预设未启用'}}
+        app.window.website_check.emit('clicked')
+        assert app.busy and not app.window.website_save.get_sensitive()
+        GLib.timeout_add(100, website_detected)
+    except Exception as exc:
+        errors.append(exc)
+        app.quit()
+    return False
+
+
+def website_detected():
+    if app.busy:
+        return True
+    try:
+        assert app.window.website_results['openai'].get_text() == '公开端点可达'
+        assert '403' in app.window.website_results['github'].get_text()
+        assert app.window.website_results['youtube'].get_text() == '预设未启用'
+        assert app.window.website_save.get_sensitive()
     except Exception as exc:
         errors.append(exc)
     finally:
@@ -125,4 +203,5 @@ app.run([sys.argv[0]])
 if errors:
     raise errors[0]
 assert app.follower.process is None
-print('PASS: GTK 页面、日志、深色模式、节点稳定更新和资源回收')
+fixture_home.cleanup()
+print('PASS: GTK 页面、日志、节点、网站真实保存及校验、深色模式和资源回收')
