@@ -283,6 +283,10 @@ class ReleaseSecurityTests(unittest.TestCase):
                 proxy = 'http://127.0.0.1:17890'
             inject_desktop.do_inject(Args(), src, Args.proxy, target.parent, backup, manifest)
             self.assertIn('--my-options', target.read_text())
+            injected = target.read_bytes()
+            for _ in range(2):
+                inject_desktop.do_enable(Args(), target.parent, backup, manifest)
+                self.assertEqual(target.read_bytes(), injected)
             for _ in range(2):
                 inject_desktop.do_disable(target.parent, backup, manifest)
                 self.assertEqual(target.read_text(), original)

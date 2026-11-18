@@ -476,7 +476,7 @@ main() {
             trap 'exit 130' INT
             install_systemd_units
             install_proxy_guard
-            install_controller || true
+            install_controller || die "路由引擎安装失败，已中止配置"
             write_kit_env
             install_desktop_inject
             install_gui

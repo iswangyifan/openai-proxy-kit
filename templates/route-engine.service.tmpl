@@ -5,7 +5,7 @@ Wants=@UNIT_MIHOMO@
 
 [Service]
 Type=simple
-EnvironmentFile="@CONTROLLER_ENV@"
+EnvironmentFile=@CONTROLLER_ENV@
 ExecStart=/usr/bin/python3 "@CONTROLLER_BIN@"
 Restart=on-failure
 RestartSec=5

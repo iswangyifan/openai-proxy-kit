@@ -96,6 +96,14 @@ def do_inject(args, src: Path, proxy: str, user_apps: Path, backup_dir: Path, ma
     target, in_place = resolve_target(src, user_apps)
 
     existing = manifest["injected"].get(str(target))
+    if target.exists() and is_injected(target.read_text(encoding='utf-8')):
+        if not existing:
+            die(f"启动器已有代理标记但缺少恢复记录，保留文件：{target.name}")
+        digest = existing.get('injected_sha256')
+        if digest and hashlib.sha256(target.read_bytes()).hexdigest() != digest:
+            die(f"启动器注入后已被编辑，保留文件：{target.name}")
+        print(f"[inject_desktop] 跳过（用户覆盖已注入）: {target.name}")
+        return
     if existing and target.exists() and not is_injected(target.read_text(encoding='utf-8')):
         backup = Path(existing['backup'])
         if backup.exists() and target.read_bytes() != backup.read_bytes():

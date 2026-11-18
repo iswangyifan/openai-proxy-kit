@@ -22,6 +22,8 @@ if name == 'systemctl':
         print('42')
     if 'enable' in args and state.get('start_fail'):
         sys.exit(1)
+    if 'enable' in args and 'controller.service' in args and state.get('controller_start_fail'):
+        sys.exit(1)
     if 'disable' in args and state.get('stop_fail'):
         sys.exit(1)
 elif name == 'ss' and state.get('listening'):
@@ -83,6 +85,12 @@ class SwitchTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertNotIn('gsettings set', calls)
         self.assertNotIn('enable --now guard.timer', calls)
+
+    def test_route_start_failure_rolls_back_before_setting_proxy(self):
+        result, calls = self.run_switch('start', listening=True, active=True, controller_start_fail=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn('gsettings set', calls)
+        self.assertIn('disable --now controller.service core.service', calls)
 
     def test_own_core_before_proxy_before_guard(self):
         result, calls = self.run_switch('start', listening=True, active=True, pid=42)

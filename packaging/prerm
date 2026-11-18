@@ -2,5 +2,7 @@
 set -eu
 # 升级时保留用户服务及代理；仅真正移除软件时清理。
 if [ "$1" = remove ]; then
-    /usr/bin/python3 -E -s /usr/lib/openai-proxy-kit/scripts/package_cleanup.py --all-users
+    /usr/bin/python3 -B -E -s /usr/lib/openai-proxy-kit/scripts/package_cleanup.py --all-users
+    # 清理旧版维护脚本生成的 root 字节码，避免 dpkg 留下空壳目录。
+    /usr/bin/py3clean /usr/lib/openai-proxy-kit
 fi

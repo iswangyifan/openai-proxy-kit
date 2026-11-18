@@ -65,6 +65,13 @@ class RouteTests(unittest.TestCase):
         engine.epoch = api.signature()
         return engine, api, clock, events
 
+    def test_real_core_null_connections_does_not_abort_route_cycle(self):
+        engine, api, clock, _ = self.engine()
+        api.connections = None
+        engine.step()
+        self.assertFalse(engine.last_traffic)
+        self.assertEqual(engine.ledger.node('B')['checks'], 1)
+
     def test_cancel_during_qualification_does_not_punish(self):
         engine, api, _, _ = self.engine()
         engine.wait = lambda _: True

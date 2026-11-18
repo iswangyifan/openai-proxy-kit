@@ -8,6 +8,25 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ControllerInstallTests(unittest.TestCase):
+    def test_route_unit_environment_path_is_accepted_by_systemd_parser(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / 'path with spaces'
+            root.mkdir()
+            unit = root / 'opk-parser.service'
+            text = (ROOT / 'templates/route-engine.service.tmpl').read_text()
+            for key, value in {'UNIT_MIHOMO': 'opk-parser-core.service',
+                               'CONTROLLER_ENV': str(root / 'controller.env'),
+                               'CONTROLLER_BIN': str(ROOT / 'scripts/route_engine.py')}.items():
+                text = text.replace('@' + key + '@', value)
+            unit.write_text(text)
+            (root / 'opk-parser-core.service').write_text('[Service]\nExecStart=/usr/bin/true\n')
+            result = subprocess.run(['systemd-analyze', 'verify', '--man=no', str(unit),
+                                     str(root / 'opk-parser-core.service')],
+                                    capture_output=True, text=True, timeout=10)
+            # systemd 对无效 EnvironmentFile 只警告且仍返回 0，必须检查诊断。
+            self.assertNotIn('EnvironmentFile= path is not absolute', result.stderr)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
     def install(self, active):
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)

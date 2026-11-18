@@ -67,7 +67,7 @@ bash packaging/build-linux.sh
 
 核心版本和可信摘要由 [core.lock.json](../packaging/core.lock.json) 固定；发行包仅接受锁定且已审核的核心；自定义版本须同步更新二进制摘要、准确源码包及源码摘要，不能覆盖一个路径就绕过门禁。首版只提供 amd64 锁定输入。构建会访问 GitHub 和 proxy.golang.org 获取固定依赖与源码；下载失败不跳过校验，离线构建需要先准备对应的校验缓存。不在安装阶段下载额外运行时。
 
-产物位于 `dist/`。包内 CORE-ORIGIN.json 从实际入包文件生成；对应 GPL 核心及实际 Go 模块源码一并生成供发布；模块 ZIP 与二进制 buildinfo 中的 h1 校验一致。许可清单与全文随包提供。所有自动化测试均使用隔离状态、合成凭据或本地假 API，不访问真实账号。
+产物位于 `dist/`。包内 CORE-ORIGIN.json 从实际入包文件生成；对应 GPL 核心及实际 Go 模块源码一并生成供发布；模块 ZIP 与二进制 buildinfo 中的 h1 校验一致。许可清单与全文随包提供。默认 `tests/check.sh` 使用隔离状态、合成凭据或本地假 API，不访问真实账号；可选真实 VM 验收的结果和边界见[发行验收记录](acceptance-2026-11-18.md)。
 
 发布步骤与验收边界见[发布流程](releasing.md)，隐私说明见[安全策略](../SECURITY.md)，许可见[NOTICE](../NOTICE)。
 

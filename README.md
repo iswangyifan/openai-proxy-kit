@@ -78,11 +78,13 @@ bash packaging/build-linux.sh
 ## 文档与许可
 
 - [安装与使用](docs/README.md)
+- [同事安装与试用](docs/team-onboarding.md)
 - [常见问题](docs/troubleshooting.md)
 - [后续迭代](docs/roadmap.md)
 - [贡献指南](CONTRIBUTING.md)
 - [变更记录](CHANGELOG.md)
 - [发布与验收流程](docs/releasing.md)
+- [0.3.0 实际验收记录](docs/acceptance-2026-11-18.md)
 - [第三方组件声明](NOTICE)
 - [MIT 许可证](LICENSE)
 

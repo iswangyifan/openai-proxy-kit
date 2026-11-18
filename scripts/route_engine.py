@@ -299,7 +299,10 @@ class Engine:
 
     def observe_traffic(self):
         try:
-            connections = self.api.request('/connections').get('connections', [])
+            # mihomo 没有活动连接时实际返回 null，不能直接迭代。
+            connections = self.api.request('/connections').get('connections') or []
+            if not isinstance(connections, list):
+                return
             if any(any(str(row.get('metadata', {}).get('host', '')).lower().rstrip('.') == domain or
                        str(row.get('metadata', {}).get('host', '')).lower().rstrip('.').endswith('.' + domain)
                        for domain in ('openai.com', 'chatgpt.com', 'oaistatic.com', 'oaiusercontent.com'))
@@ -452,8 +455,8 @@ def main():
                 log('route_evidence_discarded', level='warning')
                 if args.once:
                     return 1
-            except (OSError, ValueError, TypeError, KeyError):
-                log('route_cycle_failed', level='error')
+            except (OSError, ValueError, TypeError, KeyError) as exc:
+                log('route_cycle_failed', level='error', error_type=type(exc).__name__)
                 if args.once:
                     return 1
             if args.once:
@@ -463,8 +466,8 @@ def main():
             engine.rollback()
         if lock:
             lock.close()
-    except (OSError, ValueError, TypeError, KeyError):
-        log('route_engine_unavailable', level='error')
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        log('route_engine_unavailable', level='error', error_type=type(exc).__name__)
         return 1
     return 0
 

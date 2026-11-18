@@ -2,6 +2,8 @@
 
 仓库目标：[iswangyifan/openai-proxy-kit](https://github.com/iswangyifan/openai-proxy-kit)。先发布候选版，完成干净系统验收后再发布稳定版。
 
+最近一次实际执行结果见 [0.3.0 发行验收记录](acceptance-2026-11-18.md)，包含真实虚拟机、升级卸载、GNOME GUI/托盘及 Codex 请求。下方清单是持续发布要求，不表示远端 CI 和 Release 已完成。
+
 ## 一、本地准备与代码门禁
 
 1. 所有必要源码、图标、文档、构建锁定输入与许可证进入 Git；缓存、个人配置和发行包不进入 Git。

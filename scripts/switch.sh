@@ -32,7 +32,11 @@ has_gsettings() { command -v gsettings >/dev/null 2>&1; }
 unit_exists() { [ -f "$SYSTEMD_USER_DIR/$1" ]; }
 stop_unit() {
     if unit_exists "$1"; then
-        systemctl --user disable --now "$1"
+        if [ "$(systemctl --user is-enabled "$1" 2>/dev/null || true)" = static ]; then
+            systemctl --user stop "$1"
+        else
+            systemctl --user disable --now "$1"
+        fi
     elif systemctl --user is-active --quiet "$1"; then
         # unit 文件丢失时，systemd 仍可能缓存并运行该服务。
         systemctl --user stop "$1"
@@ -70,7 +74,7 @@ svc_start() {
     fi
     for u in "$UNIT_CONTROLLER"; do
         if unit_exists "$u"; then
-            systemctl --user enable --now "$u" 2>/dev/null || warn "启动失败: $u"
+            systemctl --user enable --now "$u" 2>/dev/null || { err "启动失败: $u"; return 1; }
         else
             warn "unit 未安装，跳过: $u"
         fi
