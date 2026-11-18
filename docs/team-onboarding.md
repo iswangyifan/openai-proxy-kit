@@ -7,11 +7,14 @@
 1. 从本项目维护者的 GitHub Release 下载 `.deb` 与 `SHA256SUMS`。在下载目录执行：
 
    ```bash
-   sha256sum --check --ignore-missing SHA256SUMS
+   ls -lh ./openai-proxy-kit_0.3.0_amd64.deb ./SHA256SUMS &&
+   sha256sum --check --ignore-missing SHA256SUMS &&
    sudo apt install ./openai-proxy-kit_0.3.0_amd64.deb
    ```
 
    应看到已下载 `.deb` 的校验结果为 `OK`。哈希用于完整性校验，目前不是独立数字签名。
+
+   `./` 指终端当前目录，不是固定的下载目录。未找到文件时先进入实际保存目录，或使用绝对路径；没有成功安装前不要运行 `openai-proxy-kit`。如果 Releases 尚无附件，请向维护者索取安装包；源码仓库不包含构建产物。
 
 2. 从应用菜单打开 **OpenAI Proxy Kit**，进入“工具与设置”，输入自己有权使用的 Clash YAML 订阅地址，优先使用 HTTPS。项目不提供订阅、节点或账号。
 3. 按需启用启动器适配，再点击“配置并开启代理”。启动器适配是可选的，默认关闭；不要直接照搬他人的配置、密钥或私有状态文件。

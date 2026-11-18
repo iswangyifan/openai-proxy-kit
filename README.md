@@ -28,12 +28,17 @@
 
 ## 安装与使用
 
-下载发行包后安装：
+先取得 `.deb` 安装包，并在终端进入它实际保存的目录。`./` 表示终端当前目录，并不表示项目目录；仅克隆源码不会得到安装包。请确认 [Releases](https://github.com/iswangyifan/openai-proxy-kit/releases) 已提供附件，否则使用维护者提供的已验收安装包。
 
 ```bash
-sudo apt install ./openai-proxy-kit_0.3.0_amd64.deb
+ls -lh ./openai-proxy-kit_0.3.0_amd64.deb &&
+sudo apt install ./openai-proxy-kit_0.3.0_amd64.deb &&
 openai-proxy-kit
 ```
+
+如果安装包由本项目构建生成，请在**项目根目录**执行 `sudo apt install ./dist/openai-proxy-kit_0.3.0_amd64.deb`。也可将命令中的路径替换为安装包的绝对路径。
+
+出现“不支持的文件”时，先检查文件是否存在；安装未成功时不会出现 `openai-proxy-kit` 命令。
 
 从应用菜单打开 **OpenAI Proxy Kit**，在“工具与设置”中输入 Clash YAML 订阅地址，点击“配置并开启代理”。安装软件或只打开窗口不会自动开启代理；首次配置按钮会生成用户服务并开启代理。
 
