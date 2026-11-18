@@ -1,14 +1,16 @@
 [Unit]
-Description=openai-route-controller route breaker (openai-proxy-kit)
+Description=openai-proxy-kit route engine
 After=@UNIT_MIHOMO@
 Wants=@UNIT_MIHOMO@
 
 [Service]
 Type=simple
 EnvironmentFile="@CONTROLLER_ENV@"
-ExecStart="@CONTROLLER_BIN@"
+ExecStart=/usr/bin/python3 "@CONTROLLER_BIN@"
 Restart=on-failure
 RestartSec=5
+UMask=0077
+NoNewPrivileges=true
 
 [Install]
 WantedBy=default.target

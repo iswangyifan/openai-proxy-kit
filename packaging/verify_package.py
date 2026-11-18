@@ -20,14 +20,14 @@ with tempfile.TemporaryDirectory() as temporary:
     subprocess.run(['dpkg-deb', '--extract', str(package), temporary], check=True)
     app = unpacked / 'usr/lib/openai-proxy-kit'
     doc = unpacked / 'usr/share/doc/openai-proxy-kit'
-    for name in ('kit_state.py', 'system_proxy.py', 'package_cleanup.py', 'runtime.py', 'gui.py', 'tray.py'):
+    for name in ('kit_state.py', 'system_proxy.py', 'package_cleanup.py', 'runtime.py', 'gui.py', 'tray.py', 'route_engine.py', 'route_model.py'):
         assert (app / 'scripts' / name).read_bytes() == (ROOT / 'scripts' / name).read_bytes(), name
     assert not (app / 'libexec/geodata').exists()
     assert not list(app.rglob('*.mjs'))
     assert not list(app.rglob('node_modules'))
     assert not list(app.rglob('kit.env'))
     assert (unpacked / 'var/lib/openai-proxy-kit/users').stat().st_mode & 0o7777 == 0o1777
-    for name in ('LICENSE', 'NOTICE', 'MIHOMO-LICENSE', 'NODE-LICENSE', 'CONTROLLER-LICENSE', 'SECURITY.md'):
+    for name in ('LICENSE', 'NOTICE', 'MIHOMO-LICENSE', 'SECURITY.md'):
         assert (doc / name).is_file(), name
     origin = json.loads((doc / 'CORE-ORIGIN.json').read_text())
     assert origin['sha256'] == hashlib.sha256((app / 'libexec/mihomo').read_bytes()).hexdigest()
@@ -37,10 +37,11 @@ with tempfile.TemporaryDirectory() as temporary:
         for license in module['licenses']:
             assert hashlib.sha256((doc / 'MIHOMO-DEPENDENCIES' / license['path']).read_bytes()).hexdigest() == license['sha256']
     assert origin == json.loads((ROOT / 'dist/CORE-ORIGIN.json').read_text())
-    result = subprocess.run([str(app / 'libexec/openai-route-controller'), '--version'],
+    result = subprocess.run(['/usr/bin/python3', str(app / 'scripts/route_engine.py'), '--version'],
                             env={'PATH': '/nonexistent'}, capture_output=True, text=True, check=True)
-    assert 'SEA=true' in result.stdout
+    assert 'route engine ' + version in result.stdout
+    assert sorted(p.name for p in (app / 'libexec').iterdir()) == ['mihomo']
     for file in unpacked.rglob('*'):
         if file.is_file():
             assert not file.stat().st_mode & 0o022, file
-print('PASS: 发行包布局、私密配置排除、清理钩子、许可、实际核心来源及独立 controller')
+print('PASS: 发行包布局、私密配置排除、清理钩子、许可、实际核心来源及本项目路由引擎')

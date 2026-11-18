@@ -6,17 +6,10 @@ cd "$ROOT"
 VERSION="$(cat VERSION)"
 ARCH="$(dpkg --print-architecture)"
 MIHOMO_BIN="${MIHOMO_BIN:-$ROOT/.build-cache/core/mihomo}"
-[ "$(node -p process.versions.node)" = "$(cat packaging/NODE-VERSION)" ] || {
-    echo 'Node 版本须与 packaging/NODE-VERSION 一致以匹配运行时许可证' >&2; exit 1;
-}
 [ -x "$MIHOMO_BIN" ] || { echo '请用 MIHOMO_BIN 指定当前架构的 mihomo 核心' >&2; exit 1; }
 /usr/bin/python3 packaging/core_assets.py origin "$MIHOMO_BIN" >/dev/null
 MIHOMO_BIN="$MIHOMO_BIN" /usr/bin/python3 packaging/audit_core_licenses.py verify
-mkdir -p .build-tools build
-cp packaging/package.json packaging/package-lock.json .build-tools/
-npm ci --prefix .build-tools --cache .build-cache --no-audit --no-fund
-
-node packaging/build-controller.cjs
+mkdir -p build
 STAGE="$(mktemp -d "$ROOT/build/deb.XXXXXX")"
 trap 'rm -rf "$STAGE"' EXIT
 APP="$STAGE/usr/lib/openai-proxy-kit"
@@ -29,19 +22,16 @@ cp -R assets/. "$APP/assets/"
 cp install.sh diagnose.sh uninstall.sh VERSION "$APP/"
 touch "$APP/packaged"
 install -m 0755 "$MIHOMO_BIN" "$APP/libexec/mihomo"
-install -m 0755 build/controller/openai-route-controller "$APP/libexec/openai-route-controller"
 install -m 0755 packaging/openai-proxy-kit "$STAGE/usr/bin/openai-proxy-kit"
 install -m 0644 packaging/openai-proxy-kit.desktop "$STAGE/usr/share/applications/io.github.opk.Console.desktop"
 cp assets/icons/*.svg "$STAGE/usr/share/icons/hicolor/scalable/apps/"
-cp LICENSE NOTICE packaging/NODE-LICENSE packaging/MIHOMO-LICENSE "$STAGE/usr/share/doc/openai-proxy-kit/"
+cp LICENSE NOTICE packaging/MIHOMO-LICENSE "$STAGE/usr/share/doc/openai-proxy-kit/"
 cp -R third_party/mihomo-licenses "$STAGE/usr/share/doc/openai-proxy-kit/MIHOMO-DEPENDENCIES"
-cp third_party/route-controller/LICENSE "$STAGE/usr/share/doc/openai-proxy-kit/CONTROLLER-LICENSE"
 /usr/bin/python3 packaging/core_assets.py origin "$APP/libexec/mihomo" > "$STAGE/usr/share/doc/openai-proxy-kit/CORE-ORIGIN.json"
-cp packaging/NODE-VERSION "$STAGE/usr/share/doc/openai-proxy-kit/"
 cp README.md SECURITY.md CONTRIBUTING.md CHANGELOG.md "$STAGE/usr/share/doc/openai-proxy-kit/"
 cp -R docs "$STAGE/usr/share/doc/openai-proxy-kit/"
 mkdir -p "$STAGE/usr/share/doc/openai-proxy-kit/packaging"
-cp packaging/core.lock.json packaging/NODE-VERSION packaging/NODE-LICENSE packaging/MIHOMO-LICENSE "$STAGE/usr/share/doc/openai-proxy-kit/packaging/"
+cp packaging/core.lock.json packaging/MIHOMO-LICENSE "$STAGE/usr/share/doc/openai-proxy-kit/packaging/"
 cp packaging/copyright "$STAGE/usr/share/doc/openai-proxy-kit/copyright"
 BUILD_DATE="$(LC_ALL=C date -u -R)"
 cat > "$STAGE/usr/share/doc/openai-proxy-kit/changelog" <<EOF
@@ -68,10 +58,10 @@ Priority: optional
 Architecture: $ARCH
 Maintainer: openai-proxy-kit contributors <iswangyifan@users.noreply.github.com>
 Homepage: https://github.com/iswangyifan/openai-proxy-kit
-Depends: libc6 (>= 2.35), libstdc++6, python3 (>= 3.10), python3-gi, python3-yaml, gir1.2-gtk-4.0 (>= 4.10), gir1.2-adw-1 (>= 1.4), gir1.2-gdkpixbuf-2.0, librsvg2-common, curl, systemd, iproute2, libglib2.0-bin, util-linux (>= 2.39), dbus, dconf-gsettings-backend, gsettings-desktop-schemas
+Depends: libc6 (>= 2.35), python3 (>= 3.10), python3-gi, python3-yaml, gir1.2-gtk-4.0 (>= 4.10), gir1.2-adw-1 (>= 1.4), gir1.2-gdkpixbuf-2.0, librsvg2-common, curl, systemd, iproute2, libglib2.0-bin, util-linux (>= 2.39), dbus, dconf-gsettings-backend, gsettings-desktop-schemas
 Description: Linux proxy console for Codex and ChatGPT
- Native GTK4 dashboard, tray, live logs and self-contained route controller.
- No external controller source checkout or Node.js installation is required.
+ Native GTK4 dashboard, tray, live logs and project route engine.
+ No additional runtime or external controller checkout is required.
 EOF
 find "$STAGE" -type f -exec chmod go-w {} +
 find "$STAGE" -type d ! -path "$STAGE/var/lib/openai-proxy-kit/users" -exec chmod go-w {} +

@@ -1,4 +1,4 @@
-"""独立 session bus 托盘往返，以及无 Node PATH 的 SEA 影子探测。"""
+"""独立 session bus 托盘往返，以及本项目路由引擎的只读影子探测。"""
 import json
 import os
 import subprocess
@@ -78,9 +78,9 @@ class IntegrationTests(unittest.TestCase):
             loop.quit()
             thread.join(2)
 
-    def test_bundled_controller_shadow_without_node(self):
-        binary = Path(os.environ.get('OPK_TEST_CONTROLLER', ROOT / 'build/controller/openai-route-controller'))
-        self.assertTrue(binary.is_file(), '先构建 controller 二进制')
+    def test_project_engine_shadow_without_extra_runtime(self):
+        binary = Path(os.environ.get('OPK_TEST_CONTROLLER', ROOT / 'scripts/route_engine.py'))
+        self.assertTrue(binary.is_file())
         requests = []
 
         class Handler(BaseHTTPRequestHandler):
@@ -112,26 +112,23 @@ class IntegrationTests(unittest.TestCase):
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 curl = Path(tmp) / 'curl'
-                curl.write_text('''#!/bin/sh
-for target; do :; done
-case "$target" in
-  */codex/settings/usage) printf '403\\t4000\\t0.010' ;;
-  */cdn-cgi/trace) printf '200\\t120\\t0.010' ;;
-  *) printf '405\\t0\\t0.010' ;;
-esac
-''')
+                curl.write_text("#!/usr/bin/python3\nimport pathlib,sys\na=sys.argv[1:]\np=pathlib.Path(a[a.index('--output')+1])\np.write_text('ip=127.0.0.1\\nloc=ZZ\\n' if a[-1].endswith('/trace') else 'User-agent: *\\n')\nprint('200',end='')\n")
                 curl.chmod(0o755)
                 env = dict(os.environ, PATH='/nonexistent', CURL_PATH=str(curl), OPENAI_GROUP='Test',
                            MIHOMO_API=f'http://127.0.0.1:{server.server_port}', MIHOMO_PROXY='http://127.0.0.1:1',
                            MIHOMO_SOCKET='', MIHOMO_SECRET='', STATE_PATH=str(Path(tmp) / 'state.json'), LOG_PATH='')
-                version = subprocess.run([str(binary), '--version'], env=env, capture_output=True, text=True, timeout=5)
-                self.assertIn('SEA=true', version.stdout)
-                result = subprocess.run([str(binary), '--once', '--shadow'], env=env,
+                mapping = Path(tmp) / 'map.json'
+                mapping.write_text(json.dumps({'generation': 'a' * 64, 'bindings': {'JP-Test': 17900}}))
+                env['PROBE_MAP'] = str(mapping)
+                version = subprocess.run(['/usr/bin/python3', str(binary), '--version'], env=env, capture_output=True, text=True, timeout=5)
+                self.assertIn('route engine', version.stdout)
+                result = subprocess.run(['/usr/bin/python3', str(binary), '--once', '--shadow'], env=env,
                                         capture_output=True, text=True, timeout=15)
                 self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
-                self.assertIn('controller_started', result.stdout)
+                self.assertIn('route_engine_started', result.stdout)
+                self.assertFalse((Path(tmp) / 'state.json').exists())
                 events = [json.loads(line) for line in result.stdout.splitlines() if line.startswith('{')]
-                self.assertTrue(any(e.get('event') == 'current_probe' and e.get('ok') for e in events))
+                self.assertTrue(any(e.get('event') == 'route_current_probe' and e.get('ok') for e in events))
                 self.assertIn('/proxies/Test', requests)
         finally:
             server.shutdown()

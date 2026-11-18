@@ -15,17 +15,12 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
-        with:
-          node-version-file: packaging/NODE-VERSION
-          package-manager-cache: false
       - name: System dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y python3-gi python3-yaml gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-gdkpixbuf-2.0 librsvg2-common curl systemd iproute2 libglib2.0-bin util-linux dbus dconf-gsettings-backend gsettings-desktop-schemas xvfb dpkg-dev binutils
       - run: bash packaging/fetch-core.sh
       - run: bash packaging/build-linux.sh
-      - run: npm audit --prefix .build-tools --audit-level=high
       - run: bash tests/check.sh
       - name: Check package metadata and checksum
         run: |

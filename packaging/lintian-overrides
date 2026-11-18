@@ -1,11 +1,5 @@
-# Self-contained runtime is intentional for GitHub delivery; Node's bundled
-# third-party license text is supplied as NODE-LICENSE. Update the pinned runtime
-# for security fixes. This is not a Debian archive submission.
-openai-proxy-kit: embedded-library zlib [usr/lib/openai-proxy-kit/libexec/openai-route-controller]
 # Official upstream Go core is distributed unchanged with corresponding source.
 openai-proxy-kit: statically-linked-binary [usr/lib/openai-proxy-kit/libexec/mihomo]
-# Official Node runtime builds currently are not PIE; no stronger hardening claim.
-openai-proxy-kit: hardening-no-pie [usr/lib/openai-proxy-kit/libexec/openai-route-controller]
 # UID ownership is checked before delegation; root never reads user file contents.
 openai-proxy-kit: non-standard-dir-perm 1777 != 0755 [var/lib/openai-proxy-kit/users/]
 # Data template only; the rendered wrapper is explicitly executable.

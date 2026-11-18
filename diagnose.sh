@@ -21,7 +21,7 @@ fi
 # 关键变量兜底（kit.env 缺失/损坏时仍可诊断默认端口）
 : "${MIXED_PORT:=7890}" "${API_PORT:=9090}" "${PROBE_PORT_BASE:=17900}"
 : "${OPENAI_GROUP:=OpenAI 自动选择}"
-: "${UNIT_MIHOMO:=mihomo-kit.service}" "${UNIT_CONTROLLER:=openai-route-controller-kit.service}"
+: "${UNIT_MIHOMO:=mihomo-kit.service}" "${UNIT_CONTROLLER:=opk-route.service}"
 : "${UNIT_GUARD_TIMER:=proxy-guard-kit.timer}" "${UNIT_GUARD_SERVICE:=proxy-guard-kit.service}"
 : "${MIHOMO_CONF_DIR:=$HOME/.config/mihomo}"
 

@@ -1,22 +1,13 @@
 NOTICE — 第三方组件声明
 ======================
 
-openai-proxy-kit 的 Linux 发行包包含以下组件。用户无需克隆额外仓库或安装外部 Node.js。
+openai-proxy-kit 的 Linux 发行包包含以下组件；系统依赖由包管理器提供。
 
-openai-route-controller
-  上游: https://github.com/tianwdong/openai-route-controller
-  固定提交: 75900e4f524e9a84722d3b0ab474da6df6dcef89
-  许可证: MIT — Copyright (c) 2026 Tianwen Dong
-  用途: OpenAI 路由探测、候选验证、故障切换、切换后复核、回滚及隔离
-  集成: third_party/route-controller 中保留构建输入与完整 MIT 文本；
-        构建时打包为自带运行时的 Node SEA 二进制，发行包不安装其源码目录。
-  完整许可证: third_party/route-controller/LICENSE；发行包内 CONTROLLER-LICENSE。
-
-Node.js
-  上游: https://nodejs.org/
-  用途: controller 内部运行时；使用端无需另行安装。
-  许可证: Node.js 与其包含的第三方库许可见 packaging/NODE-LICENSE（版本见 packaging/NODE-VERSION），
-          发行包随附相同文本。构建强制校验对应版本。
+本项目路由引擎
+  实现: scripts/route_engine.py 与 scripts/route_model.py
+  许可证: 项目 MIT 许可证
+  用途: 候选证据采集、受保护的路由选择、失败回滚与隔离
+  依赖: Python 标准库与系统 curl，不附加独立运行时
 
 mihomo
   上游: https://github.com/MetaCubeX/mihomo

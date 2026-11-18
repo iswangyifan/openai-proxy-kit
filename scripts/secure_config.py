@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 import yaml
 from kit_state import private_write
+from route_model import write_probe_map
 
 path = Path(sys.argv[1])
 original = path.read_text()
@@ -18,3 +19,5 @@ if '本文件由 openai-proxy-kit 自动生成' in original:
     config.pop('geox-url', None)
 private_write(path.with_suffix('.yaml.pre-auth'), original)
 private_write(path, yaml.safe_dump(config, allow_unicode=True, sort_keys=False))
+
+write_probe_map(config, path.parent / 'probe-map.json')

@@ -24,13 +24,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-Bundled route controller: Copyright (c) 2026 Tianwen Dong, MIT.
-Complete terms: /usr/share/doc/openai-proxy-kit/CONTROLLER-LICENSE.
-Source and fixed commit: NOTICE.
-
-Bundled Node.js: Node.js contributors and included third-party authors.
-Complete copyright notices and terms: NODE-LICENSE in this directory.
-The runtime is modified only to embed the controller and remove symbol tables.
+The route engine, desktop integration and packaging are project code under MIT.
 
 Bundled mihomo: MetaCubeX contributors, GPL-3.0.
 Complete GPL terms: MIHOMO-LICENSE in this directory.

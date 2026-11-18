@@ -51,9 +51,9 @@ if 'is-active' in sys.argv:
             self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
             unit = (home / '.config/systemd/user/legacy-controller.service').read_text()
             self.assertIn('After=legacy-core.service', unit)
-            self.assertIn('ExecStart="' + str(controller) + '"', unit)
+            self.assertIn('ExecStart=/usr/bin/python3 "' + str(ROOT / 'scripts/route_engine.py') + '"', unit)
             self.assertNotIn('node ', unit)
-            self.assertFalse((data / 'openai-route-controller').exists())
+            self.assertNotIn('libexec/', unit)
             self.assertIn("GUARD_LOG='" + values['GUARD_LOG'] + "'", envfile.read_text())
             return (home / 'calls').read_text()
 

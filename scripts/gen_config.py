@@ -6,13 +6,11 @@
   2. 提取全部 proxies 并清洗（去重/去空/截断上限）
   3. 生成 mihomo 配置: 固定段模板 + 静态 proxies + OpenAI 动态分组 + 置顶规则
      + probe listeners
-     （组与 listeners 均为「节点名快照」设计——上游 controller 的 probe 端口
+     （组与 listeners 均为「节点名快照」设计——探测端口
      映射依赖静态节点名；订阅节点变更后由 install.sh update 重新生成）
 
-probe listeners 端口映射约定（必须与上游 openai-route-controller 一致）:
-  controller.mjs 的 nodeProbeProxyUrl() 按候选名「去重 + 字典序排序」后的
-  索引分配端口 PROBE_BASE_PORT + i（上游硬编码 17900）。本生成器对
-  OpenAI 组候选做同样的 sorted(set(names)) 排序生成 listeners。
+探测入口按共享节点顺序分配端口；私有映射 sidecar 与配置一起生成，
+供路由引擎核对配置代际与候选入口。
 """
 
 import argparse
@@ -26,6 +24,7 @@ import sys
 from pathlib import Path
 
 import yaml
+from route_model import ordered_nodes, write_probe_map
 
 PROBE_LISTEN_HOST = "127.0.0.1"
 GENERATED_HEADER = (
@@ -115,8 +114,7 @@ def build_config(proxies: list[dict], openai_names: list[str], args) -> dict:
     except yaml.YAMLError as e:
         die(f"基础模板渲染后解析失败（模板损坏?）: {e}")
 
-    # 静态 proxies: 组与 probe listeners 都按「节点名快照」设计（上游 controller
-    # 的 probe 端口映射约定依赖静态节点名），订阅更新由 install.sh update 重新生成
+    # 静态节点与独立监听入口采用同一份快照，订阅更新后重新生成映射。
     config["secret"] = os.environ.get("MIHOMO_SECRET") or secrets.token_hex(32)
     config["proxies"] = proxies
 
@@ -148,9 +146,9 @@ def build_config(proxies: list[dict], openai_names: list[str], args) -> dict:
                   .replace("@FALLBACK_GROUP@", "漏网之鱼"))
     config["rules"] = yaml.safe_load(rules_text)
 
-    # --- probe listeners: 与上游 controller 的「去重+排序+端口偏移」约定严格一致 ---
+    # --- probe listeners: 按本项目共享顺序生成私有探测入口 ---
     listeners = []
-    for i, name in enumerate(sorted(set(openai_names), key=lambda n: n.encode("utf-16-be"))):
+    for i, name in enumerate(ordered_nodes(openai_names)):
         listeners.append({
             "name": f"openai-route-probe-{i}",
             "type": "mixed",
@@ -174,7 +172,7 @@ def main():
     ap.add_argument("--api-port", type=int, default=9090)
     ap.add_argument("--dns-port", type=int, default=1053)
     ap.add_argument("--probe-port-base", type=int, default=17900,
-                    help="probe 监听端口基址（须与 openai-route-controller 约定一致，默认 17900）")
+                    help="独立探测监听端口基址（默认 17900）")
     ap.add_argument("--openai-group", default="OpenAI 自动选择")
     ap.add_argument("--openai-filter", default=None,
                     help="正则，从全部节点中筛选 OpenAI 组候选（默认全部节点）")
@@ -230,6 +228,7 @@ def main():
             if r.returncode != 0:
                 die("mihomo -t 校验失败（配置与节点凭据不写入日志）")
             print("[gen_config] mihomo -t 语法校验通过")
+        write_probe_map(config, out.parent / 'probe-map.json')
         tmp.replace(out)
     finally:
         tmp.unlink(missing_ok=True)

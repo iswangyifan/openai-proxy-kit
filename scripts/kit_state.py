@@ -80,9 +80,12 @@ def main():
             values = {'MIHOMO_API': 'http://127.0.0.1:' + os.environ['API_PORT'],
                       'MIHOMO_PROXY': 'http://127.0.0.1:' + os.environ['MIXED_PORT'],
                       'MIHOMO_SECRET': os.environ['MIHOMO_SECRET'],
+                      'MIHOMO_UNIT': os.environ['UNIT_MIHOMO'],
+                      'PROBE_PORT_BASE': os.environ.get('PROBE_PORT_BASE', '17900'),
+                      'PROBE_MAP': str(Path(os.environ['MIHOMO_CONF_DIR']) / 'probe-map.json'),
                       'OPENAI_GROUP': os.environ['OPENAI_GROUP'],
-                      'STATE_PATH': str(Path(os.environ['INSTALL_HOME']) / 'controller/state.json'),
-                      'LOG_PATH': str(Path(os.environ['INSTALL_HOME']) / 'controller/controller.log'),
+                      'STATE_PATH': str(Path(os.environ['INSTALL_HOME']) / 'controller/route-state.json'),
+                      'LOG_PATH': str(Path(os.environ['INSTALL_HOME']) / 'controller/route.log'),
                       'CURL_PATH': '/usr/bin/curl'}
             private_write(args.path, '# openai-proxy-kit managed EnvironmentFile\n' +
                           ''.join(k + '=' + json.dumps(v, ensure_ascii=False) + '\n' for k, v in values.items()))

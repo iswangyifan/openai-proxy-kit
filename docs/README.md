@@ -4,7 +4,7 @@
 
 Ubuntu 24.04 / GNOME / amd64，Python 3.12、GTK4 ≥4.10、libadwaita ≥1.4。其他发行版与桌面暂未验收。GNOME 托盘依赖 StatusNotifierItem 扩展；缺少托盘时窗口仍提供明确退出方式。
 
-软件包内置 mihomo 和自带 Node 运行时的 controller；使用端不需要 Node、Git 或另一个源码仓库。系统 GTK/Python 等依赖由 apt 安装。
+软件包内置 mihomo 和本项目 Python 路由引擎；使用端不需要 Node、Git 或另一个源码仓库。系统 GTK/Python 等依赖由 apt 安装。
 
 ## 安装
 
@@ -12,11 +12,11 @@ Ubuntu 24.04 / GNOME / amd64，Python 3.12、GTK4 ≥4.10、libadwaita ≥1.4。
 
 ```bash
 sha256sum --ignore-missing -c SHA256SUMS
-sudo apt install ./openai-proxy-kit_0.2.1_amd64.deb
+sudo apt install ./openai-proxy-kit_0.3.0_amd64.deb
 openai-proxy-kit
 ```
 
-SHA256 检查完整性，不代表独立数字签名。路径必须指向实际下载文件；出现“不支持的文件”时先运行 `ls -l ./openai-proxy-kit_0.2.1_amd64.deb` 检查位置。
+SHA256 检查完整性，不代表独立数字签名。路径必须指向实际下载文件；出现“不支持的文件”时先运行 `ls -l ./openai-proxy-kit_0.3.0_amd64.deb` 检查位置。
 
 首次配置输入可信 Clash YAML 订阅，核对页面的系统改动和可选启动器适配后启动。GUI 默认不适配任何应用；开启可选适配时会显示候选应用并保留现有用户参数。服务启停同时启用/取消登录自启动，独立自启设置尚未实现。已开启意图会在核心重启时核验端口后恢复；遇到其他手动/PAC代理则保留其设置。
 
@@ -60,14 +60,15 @@ GUI 的“工具与设置 → 恢复用户集成”与 `reset` 使用同一清�
 sudo apt install python3 python3-gi python3-yaml gir1.2-gtk-4.0 gir1.2-adw-1 \
   gir1.2-gdkpixbuf-2.0 librsvg2-common curl systemd iproute2 libglib2.0-bin \
   util-linux dbus dconf-gsettings-backend dpkg-dev binutils xvfb
-# 安装 packaging/NODE-VERSION 指定的官方 Node（只在构建机器需要）
 bash packaging/fetch-core.sh
 bash tests/check.sh
 bash packaging/build-linux.sh
 ```
 
-核心版本和可信摘要由 [core.lock.json](../packaging/core.lock.json) 固定；发行包仅接受锁定且已审核的核心；自定义版本须同步更新二进制摘要、准确源码包及源码摘要，不能覆盖一个路径就绕过门禁。首版只提供 amd64 锁定输入。构建会访问 GitHub、npm registry 和 proxy.golang.org 获取固定依赖与源码；下载失败不跳过校验，离线构建需要先准备对应的校验缓存。构建总是执行 npm ci；不在安装阶段下载运行时或上游源码。
+核心版本和可信摘要由 [core.lock.json](../packaging/core.lock.json) 固定；发行包仅接受锁定且已审核的核心；自定义版本须同步更新二进制摘要、准确源码包及源码摘要，不能覆盖一个路径就绕过门禁。首版只提供 amd64 锁定输入。构建会访问 GitHub 和 proxy.golang.org 获取固定依赖与源码；下载失败不跳过校验，离线构建需要先准备对应的校验缓存。不在安装阶段下载额外运行时。
 
 产物位于 `dist/`。包内 CORE-ORIGIN.json 从实际入包文件生成；对应 GPL 核心及实际 Go 模块源码一并生成供发布；模块 ZIP 与二进制 buildinfo 中的 h1 校验一致。许可清单与全文随包提供。所有自动化测试均使用隔离状态、合成凭据或本地假 API，不访问真实账号。
 
 发布步骤与验收边界见[发布流程](releasing.md)，隐私说明见[安全策略](../SECURITY.md)，许可见[NOTICE](../NOTICE)。
+
+路由策略及验证边界见[路由引擎设计](route-engine.md)。

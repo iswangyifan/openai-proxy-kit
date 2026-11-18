@@ -4,7 +4,7 @@
 
 ## 本地开发
 
-目标系统：Ubuntu 24.04 / GNOME / amd64；Python 3.12，GTK4、libadwaita。构建 Node SEA 使用 [固定 Node 版本](packaging/NODE-VERSION)，使用者无需安装 Node。
+目标系统：Ubuntu 24.04 / GNOME / amd64；Python 3.12，GTK4、libadwaita。路由引擎采用 Python 标准库，构建与运行均无需额外的 JavaScript 工具链。
 
 安装依赖及完整命令见[开发和使用文档](docs/README.md)。先执行测试，再构建。测试使用临时目录、合成节点、独立 D-Bus 或回环地址，不得修改开发者当前代理。
 

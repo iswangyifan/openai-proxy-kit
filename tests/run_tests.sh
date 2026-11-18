@@ -72,7 +72,7 @@ echo "== gen_config.py =="
 
 # T1 基础生成 + 结构约定
 if mkconf "$WORK/t1.yaml"; then
-    python3 - "$WORK/t1.yaml" <<'PYEOF' && ok_ "T1 基础生成 + probe 排序约定（sorted(set) 与上游 controller 一致）" || fail_ "T1 结构断言"
+    python3 - "$WORK/t1.yaml" <<'PYEOF' && ok_ "T1 基础生成 + probe 排序约定（共享节点排序与探测映射一致）" || fail_ "T1 结构断言"
 import sys, yaml
 c = yaml.safe_load(open(sys.argv[1]))
 names = sorted({p["name"] for p in c["proxies"]})

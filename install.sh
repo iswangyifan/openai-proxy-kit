@@ -47,14 +47,14 @@ USER_APPS_DIR="$HOME/.local/share/applications"
 GUARD_BIN="$HOME/.local/bin/guard-system-proxy-kit.sh"
 KIT_ENV="${KIT_ENV:-$INSTALL_HOME/kit.env}"
 
-CONTROLLER_BIN="${CONTROLLER_BIN:-$SCRIPT_DIR/libexec/openai-route-controller}"
+CONTROLLER_BIN="${CONTROLLER_BIN:-$SCRIPT_DIR/scripts/route_engine.py}"
 CONTROLLER_ENV="$INSTALL_HOME/controller.env"
 MIHOMO_SECRET="${MIHOMO_SECRET:-}"
 MIHOMO_INSTALLED="${MIHOMO_INSTALLED:-0}"
 
 # unit 名固定带 -kit 后缀，避免与用户已有手工部署的裸名 unit 冲突
 UNIT_MIHOMO="mihomo-kit.service"
-UNIT_CONTROLLER="openai-route-controller-kit.service"
+UNIT_CONTROLLER="opk-route.service"
 UNIT_GUARD_SERVICE="proxy-guard-kit.service"
 UNIT_GUARD_TIMER="proxy-guard-kit.timer"
 
@@ -65,13 +65,10 @@ ACTION="${1:-install}"
 if [ "$SHADOW" = "1" ]; then
     MIHOMO_CONF_DIR="${MIHOMO_CONF_DIR_OVERRIDE:-$HOME/.config/mihomo-kit-shadow}"
     UNIT_MIHOMO="mihomo-kit-test.service"
-    UNIT_CONTROLLER="openai-route-controller-kit-test.service"
+    UNIT_CONTROLLER="opk-route-test.service"
     UNIT_GUARD_SERVICE="proxy-guard-kit-test.service"
     UNIT_GUARD_TIMER="proxy-guard-kit-test.timer"
-    if [ "$PROBE_PORT_BASE" != "17900" ]; then
-        warn "PROBE_PORT_BASE=$PROBE_PORT_BASE 与上游 controller 硬编码 17900 不一致："
-        warn "  影子冒烟中 controller 的 probe 探测将不可用（仅验证 API 读取/组识别）"
-    fi
+
 fi
 
 write_kit_env() {
@@ -108,9 +105,7 @@ check_env() {
         die "检测到 Clash Verge 正在运行。请先完全退出再安装（端口冲突）"
     fi
 
-    if [ "$SHADOW" != 1 ] && [ "$PROBE_PORT_BASE" != 17900 ]; then
-        die "当前 controller 的探测端口固定从 17900 开始；普通安装请保留默认值"
-    fi
+
     # 端口占用检测
     local p
     for p in "$MIXED_PORT" "$API_PORT" "$DNS_PORT"; do
@@ -238,19 +233,28 @@ install_proxy_guard() {
 # 阶段 7: 上游路由熔断器
 # ============================================================
 install_controller() {
-    phase "阶段 7/9 内置路由熔断器"
+    phase "阶段 7/9 本项目路由引擎"
+    CONTROLLER_BIN="$SCRIPT_DIR/scripts/route_engine.py"
     local was_active=0
     systemctl --user is-active --quiet "$UNIT_CONTROLLER" && was_active=1 || true
-    if [ ! -x "$CONTROLLER_BIN" ]; then
-        warn "未找到内置 controller 二进制。建议安装独立 .deb 软件包。"
-        warn "源码开发可先运行 packaging/build-linux.sh 构建；不再克隆上游仓库或安装 Node 运行时。"
+    if [ ! -f "$CONTROLLER_BIN" ]; then
+        warn "未找到本项目路由引擎。建议安装完整软件包。"
+        warn "源码开发请检查 scripts/route_engine.py 是否完整。"
         return 1
+    fi
+    local existing_unit="$SYSTEMD_USER_DIR/$UNIT_CONTROLLER"
+    if [ -f "$existing_unit" ] && grep -q 'openai-proxy-kit' "$existing_unit" && ! grep -q 'route_engine.py' "$existing_unit"; then
+        systemctl --user disable --now "$UNIT_CONTROLLER" || return 1
+        mkdir -p "$INSTALL_HOME/backup/units"
+        mv "$existing_unit" "$INSTALL_HOME/backup/units/$UNIT_CONTROLLER.bak"
+        if [ "$SHADOW" = 1 ]; then UNIT_CONTROLLER="opk-route-test.service"; else UNIT_CONTROLLER="opk-route.service"; fi
+        write_kit_env
     fi
     mkdir -p "$INSTALL_HOME/controller" "$SYSTEMD_USER_DIR"
     python3 "$SCRIPT_DIR/scripts/kit_state.py" controller "$CONTROLLER_ENV"
 
 
-    render_template "$SCRIPT_DIR/templates/openai-route-controller.service.tmpl" \
+    render_template "$SCRIPT_DIR/templates/route-engine.service.tmpl" \
         "$SYSTEMD_USER_DIR/$UNIT_CONTROLLER" \
         CONTROLLER_BIN="$CONTROLLER_BIN" CONTROLLER_ENV="$CONTROLLER_ENV" UNIT_MIHOMO="$UNIT_MIHOMO"
     systemctl --user daemon-reload
@@ -398,15 +402,18 @@ smoke_test() {
         warn "probe 端口 $PROBE_PORT_BASE 未监听（listeners 未生效?）"
     fi
     # 6. controller 影子联调（部分验证: API 读取 + 组识别，probe 受端口约束可能不可用）
-    if [ "$SHADOW" = "1" ] && [ -x "$CONTROLLER_BIN" ]; then
+    if [ "$SHADOW" = "1" ] && [ -f "$CONTROLLER_BIN" ]; then
         info "controller 影子联调 (--once --shadow，只读不改选择)..."
         local shadow_state
         shadow_state=$(mktemp -d)
         if MIHOMO_API="http://127.0.0.1:$API_PORT" \
            MIHOMO_PROXY="http://127.0.0.1:$MIXED_PORT" \
+           PROBE_MAP="$MIHOMO_CONF_DIR/probe-map.json" \
+           PROBE_PORT_BASE="$PROBE_PORT_BASE" \
+           MIHOMO_SECRET="$MIHOMO_SECRET" \
            OPENAI_GROUP="$OPENAI_GROUP" \
            STATE_PATH="$shadow_state/state.json" \
-           timeout 60 "$CONTROLLER_BIN" --once --shadow 2>&1 | tail -3; then
+           timeout 60 /usr/bin/python3 "$CONTROLLER_BIN" --once --shadow 2>&1 | tail -3; then
             ok "controller 影子联调完成（详见上方输出）"
         else
             warn "controller 影子联调异常（详见上方输出）"
@@ -495,6 +502,14 @@ main() {
             if [ "$SHADOW" != "1" ] && [ "$was_running" = 1 ]; then
                 if ! systemctl --user restart "$UNIT_MIHOMO"; then
                     cp "$MIHOMO_CONF_DIR/config.yaml.kit-bak" "$MIHOMO_CONF_DIR/config.yaml"
+                    PYTHONPATH="$SCRIPT_DIR/scripts" /usr/bin/python3 - "$MIHOMO_CONF_DIR/config.yaml" <<'PYMAP'
+import sys
+from pathlib import Path
+import yaml
+from route_model import write_probe_map
+path = Path(sys.argv[1])
+write_probe_map(yaml.safe_load(path.read_text()), path.parent / 'probe-map.json')
+PYMAP
                     systemctl --user restart "$UNIT_MIHOMO" || true
                     die "更新失败，已恢复旧配置"
                 fi
@@ -506,8 +521,8 @@ main() {
             # shellcheck disable=SC1090
             lock_kit
             load_kit_env || die "安装状态无效，请重新配置"
-            if [ -x "$SCRIPT_DIR/libexec/openai-route-controller" ]; then
-                CONTROLLER_BIN="$SCRIPT_DIR/libexec/openai-route-controller"
+            if [ -f "$SCRIPT_DIR/scripts/route_engine.py" ]; then
+                CONTROLLER_BIN="$SCRIPT_DIR/scripts/route_engine.py"
             fi
             if [ -x "$SCRIPT_DIR/libexec/mihomo" ]; then
                 MIHOMO_BIN="$SCRIPT_DIR/libexec/mihomo"
@@ -518,6 +533,9 @@ main() {
             if [ -z "$MIHOMO_SECRET" ]; then
                 migrating=1
                 MIHOMO_SECRET=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
+                export MIHOMO_SECRET
+            fi
+            if [ -f "$MIHOMO_CONF_DIR/config.yaml" ]; then
                 export MIHOMO_SECRET
                 python3 "$SCRIPT_DIR/scripts/secure_config.py" "$MIHOMO_CONF_DIR/config.yaml"
             fi

@@ -35,7 +35,7 @@ API_PORT = ENV.get("API_PORT", "9090")
 OPENAI_GROUP = ENV.get("OPENAI_GROUP", "OpenAI 自动选择")
 UNITS = {
     "mihomo": ENV.get("UNIT_MIHOMO", "mihomo-kit.service"),
-    "controller": ENV.get("UNIT_CONTROLLER", "openai-route-controller-kit.service"),
+    "controller": ENV.get("UNIT_CONTROLLER", "opk-route.service"),
     "guard": ENV.get("UNIT_GUARD_TIMER", "proxy-guard-kit.timer"),
 }
 GUARD_SERVICE = ENV.get("UNIT_GUARD_SERVICE", "proxy-guard-kit.service")
@@ -53,7 +53,7 @@ def refresh_config():
     API_PORT = ENV.get('API_PORT', '9090')
     OPENAI_GROUP = ENV.get('OPENAI_GROUP', 'OpenAI 自动选择')
     MIHOMO_API = f'http://127.0.0.1:{API_PORT}'
-    for key, envkey, default in [('mihomo', 'UNIT_MIHOMO', 'mihomo-kit.service'), ('controller', 'UNIT_CONTROLLER', 'openai-route-controller-kit.service'), ('guard', 'UNIT_GUARD_TIMER', 'proxy-guard-kit.timer')]:
+    for key, envkey, default in [('mihomo', 'UNIT_MIHOMO', 'mihomo-kit.service'), ('controller', 'UNIT_CONTROLLER', 'opk-route.service'), ('guard', 'UNIT_GUARD_TIMER', 'proxy-guard-kit.timer')]:
         UNITS[key] = ENV.get(envkey, default)
     GUARD_SERVICE = ENV.get('UNIT_GUARD_SERVICE', 'proxy-guard-kit.service')
 
