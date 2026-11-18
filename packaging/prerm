@@ -4,5 +4,5 @@ set -eu
 if [ "$1" = remove ]; then
     /usr/bin/python3 -B -E -s /usr/lib/openai-proxy-kit/scripts/package_cleanup.py --all-users
     # 清理旧版维护脚本生成的 root 字节码，避免 dpkg 留下空壳目录。
-    /usr/bin/py3clean /usr/lib/openai-proxy-kit
+    /usr/bin/python3 -B -E -s /usr/bin/py3clean /usr/lib/openai-proxy-kit
 fi
