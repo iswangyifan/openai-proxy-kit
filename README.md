@@ -28,6 +28,8 @@
 
 ## 安装与使用
 
+**第一次使用请按[新用户逐步图文教程](docs/team-onboarding.md)操作**：从取得安装包、填写订阅到选择节点、日常启停，以及已有配置时如何更换订阅。
+
 先取得 `.deb` 安装包，并在终端进入它实际保存的目录。`./` 表示终端当前目录，并不表示项目目录；仅克隆源码不会得到安装包。请确认 [Releases](https://github.com/iswangyifan/openai-proxy-kit/releases) 已提供附件，否则使用维护者提供的已验收安装包。
 
 ```bash
@@ -83,7 +85,7 @@ bash packaging/build-linux.sh
 ## 文档与许可
 
 - [安装与使用](docs/README.md)
-- [同事安装与试用](docs/team-onboarding.md)
+- [新用户逐步图文教程](docs/team-onboarding.md)
 - [常见问题](docs/troubleshooting.md)
 - [后续迭代](docs/roadmap.md)
 - [贡献指南](CONTRIBUTING.md)

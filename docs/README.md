@@ -1,5 +1,7 @@
 # 安装、使用与开发
 
+首次下载的用户请先阅读[新用户逐步图文教程](team-onboarding.md)，按界面完成安装、订阅配置和首次使用。本文保留命令、恢复与开发细节。
+
 ## 支持范围
 
 Ubuntu 24.04 / GNOME / amd64，Python 3.12、GTK4 ≥4.10、libadwaita ≥1.4。其他发行版与桌面暂未验收。GNOME 托盘依赖 StatusNotifierItem 扩展；缺少托盘时窗口仍提供明确退出方式。
