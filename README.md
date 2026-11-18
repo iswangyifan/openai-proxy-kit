@@ -30,6 +30,8 @@
 
 **第一次使用请按[新用户逐步图文教程](docs/team-onboarding.md)操作**：从取得安装包、填写订阅到选择节点、日常启停，以及已有配置时如何更换订阅。
 
+图片显示异常时，可下载[图片内嵌的 HTML 教程](docs/team-onboarding.html)，用浏览器直接打开。
+
 先取得 `.deb` 安装包，并在终端进入它实际保存的目录。`./` 表示终端当前目录，并不表示项目目录；仅克隆源码不会得到安装包。请确认 [Releases](https://github.com/iswangyifan/openai-proxy-kit/releases) 已提供附件，否则使用维护者提供的已验收安装包。
 
 ```bash
