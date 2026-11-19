@@ -5,7 +5,9 @@ import os
 import json
 import sys
 import tempfile
+import time
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 APP_ROOT = Path(os.environ.get('OPK_TEST_APP_ROOT', Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(APP_ROOT / 'scripts'))
@@ -93,11 +95,55 @@ def log_check():
         capture('logs.png')
         app.window.show_page('nodes')
         status = dict(gui.query_status(), nodes=['离线测试节点 A', '很长的离线测试节点名称 / 中文与 English'],
-                      group_now='离线测试节点 A')
+                      group_now='离线测试节点 A', node_check_generation='fixture')
+        app.status = status
+        app.window.apply_status(status)
+        assert not app.window.node_rows, '未检测节点不能默认显示为可达'
+        assert app.window.node_empty.get_visible()
+        app.window.show_all_nodes.set_active(True)
+        assert '未检测' in app.window.node_rows['离线测试节点 A'][1].get_text()
+        app.window.delay_cache = {'generation': 'fixture', 'results': {
+            '离线测试节点 A': {'ok': True, 'milliseconds': 244, 'checked_at': time.time()},
+            '很长的离线测试节点名称 / 中文与 English': {'ok': False, 'milliseconds': 0, 'checked_at': time.time()}}}
+        app.window.show_all_nodes.set_active(False)
+        assert list(app.window.node_rows) == ['离线测试节点 A']
+        assert '公开端点可达' in app.window.node_rows['离线测试节点 A'][1].get_text()
+        app.window.show_all_nodes.set_active(True)
+        assert '检测失败' in app.window.node_rows['很长的离线测试节点名称 / 中文与 English'][1].get_text()
+        app.window.apply_status(dict(status, node_check_generation='changed'))
+        assert '已过期' in app.window.node_rows['离线测试节点 A'][1].get_text()
         app.window.apply_status(status)
         first = app.window.node_rows['离线测试节点 A'][0]
         app.window.apply_status(status)
         assert app.window.node_rows['离线测试节点 A'][0] is first, '状态刷新不应重建节点'
+        gui.query_status = lambda: status
+        fixture_batch = app.window.delay_cache
+        gui.check_nodes = lambda: fixture_batch
+        app.window.delay_btn.emit('clicked')
+        assert app.busy and not app.window.delay_btn.get_sensitive()
+        GLib.timeout_add(100, node_detection_ready)
+    except Exception as exc:
+        errors.append(exc)
+        app.quit()
+    return False
+
+
+def node_detection_ready():
+    if app.busy:
+        return True
+    try:
+        assert '公开端点可达' in app.window.node_rows['离线测试节点 A'][1].get_text()
+        assert '检测于' in app.window.node_rows['离线测试节点 A'][2].get_text()
+        GLib.timeout_add(700, light_nodes)
+    except Exception as exc:
+        errors.append(exc)
+        app.quit()
+    return False
+
+
+def light_nodes():
+    try:
+        capture('nodes-light.png')
         app.style = Adw.StyleManager.get_default()
         app.style.set_color_scheme(Adw.ColorScheme.FORCE_DARK)
         GLib.timeout_add(700, dark_check)
@@ -110,6 +156,19 @@ def log_check():
 def dark_check():
     try:
         capture('nodes-dark.png')
+        app.window.set_default_size(820, 740)
+        GLib.timeout_add(500, narrow_nodes)
+    except Exception as exc:
+        errors.append(exc)
+        app.quit()
+    return False
+
+
+def narrow_nodes():
+    try:
+        assert app.window.get_width() <= 820, '节点页不应撑破窄窗口'
+        capture('nodes-narrow.png')
+        app.window.set_default_size(1080, 740)
         app.window.show_page('tools')
         assert app.window.subscription.get_text() == ''
         gui.ENV['INSTALL_HOME'] = 'offline-fixture'
@@ -190,6 +249,23 @@ def website_detected():
         assert '403' in app.window.website_results['github'].get_text()
         assert app.window.website_results['youtube'].get_text() == '预设未启用'
         assert app.window.website_save.get_sensitive()
+        # 不启动真实浏览器，验证自动认证 URI 和启动失败反馈均不泄露密钥。
+        url = 'http://127.0.0.1:19097/ui/#/setup?secret=SYNTHETIC_PANEL_SECRET'
+        launcher = Mock()
+        launcher.launch.side_effect = lambda parent, cancel, callback: callback(launcher, object())
+        def immediate(work, completed, title):
+            completed(work())
+        with patch.object(app, 'task', side_effect=immediate), \
+             patch.object(gui.runtime, 'panel_connection_url', return_value=url), \
+             patch.object(gui.Gtk.UriLauncher, 'new', return_value=launcher) as create:
+            app.window.open_panel()
+            create.assert_called_once_with(url)
+            launcher.launch_finish.assert_called_once()
+            launcher.launch_finish.side_effect = GLib.Error('private URI: ' + url)
+            app.window.open_panel()
+        logs = '\n'.join(entry.message for entry in app.logs.snapshot())
+        assert 'SYNTHETIC_PANEL_SECRET' not in logs
+        assert '浏览器未能打开高级管理' in logs
     except Exception as exc:
         errors.append(exc)
     finally:
@@ -198,7 +274,7 @@ def website_detected():
 
 
 GLib.timeout_add(1000, check)
-GLib.timeout_add_seconds(15, lambda: (errors.append(RuntimeError('desktop timeout')), app.quit(), False)[-1])
+GLib.timeout_add_seconds(25, lambda: (errors.append(RuntimeError('desktop timeout')), app.quit(), False)[-1])
 app.run([sys.argv[0]])
 if errors:
     raise errors[0]

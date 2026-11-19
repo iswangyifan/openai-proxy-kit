@@ -10,6 +10,7 @@ import sys
 import threading
 import time
 import urllib.parse
+import urllib.error
 import urllib.request
 from collections import deque
 from dataclasses import dataclass
@@ -151,11 +152,13 @@ def query_status():
         if services['mihomo'] and (mode != 'manual' or not all(
                 h == '127.0.0.1' and p == MIXED_PORT for h, p in targets[:2])):
             issues.append('系统代理未指向当前核心端口 ' + MIXED_PORT)
+    from node_checks import check_context
+    generation = check_context(dict(ENV)) if services['mihomo'] and api_available else None
     return {"services": services, "sys_proxy": mode, "proxy_owned": owned,
             "proxy_target": " / ".join(f"{h}:{p}" for h, p in targets),
             "injected": count_injected(), "running": running, "phase": phase,
             "group_now": group.get("now"), "nodes": group.get("all", []),
-            "api_available": api_available, "issues": issues,
+            "api_available": api_available, "issues": issues, "node_check_generation": generation,
             "installed": bool(ENV), "checked_at": time.strftime("%H:%M:%S")}
 
 
@@ -192,10 +195,41 @@ def put_node(node):
         return False
 
 
-def delay_test():
-    query = urllib.parse.urlencode({"url": "https://chatgpt.com", "timeout": 5000})
-    data = mihomo_get("/group/" + urllib.parse.quote(OPENAI_GROUP, safe="") + "/delay?" + query, 30)
-    return data if isinstance(data, dict) else {}
+def check_nodes():
+    from node_checks import NodeChecker
+    return NodeChecker(load_env()).run()
+
+
+def panel_connection_url():
+    """只连接本机管理页；认证信息放在片段中，不进入 HTTP 请求或操作日志。"""
+    refresh_config()
+    env = dict(ENV)
+    port = env.get('API_PORT', '9090')
+    address = 'http://127.0.0.1:' + port
+    if not env or not unit_active(env.get('UNIT_MIHOMO', 'mihomo-kit.service')):
+        raise RuntimeError('请先开启代理，再打开高级管理。')
+    directory = Path(env.get('MIHOMO_CONF_DIR', Path.home() / '.config/mihomo'))
+    if not (directory / 'ui/index.html').is_file():
+        raise RuntimeError('尚未安装高级管理页面；日常使用可直接在本软件中切换节点。')
+    secret = env.get('MIHOMO_SECRET', '')
+    request = urllib.request.Request(address + '/version',
+                                     headers={'Authorization': 'Bearer ' + secret} if secret else {})
+    try:
+        with HTTP.open(request, timeout=5) as response:
+            value = json.loads(response.read(65536))
+            if not isinstance(value, dict) or not value.get('version'):
+                raise ValueError()
+    except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403):
+            raise RuntimeError('本机管理连接验证失败。请到“工具与设置”运行诊断后重试。') from None
+        raise RuntimeError('本机管理服务响应异常，请稍后重试或运行诊断。') from None
+    except (OSError, ValueError):
+        raise RuntimeError('暂时无法连接本机管理服务，请确认代理已开启后重试。') from None
+    # MetaCubeXD 的 setup 路由会更新旧端点密钥，并在成功后 replace 到 overview。
+    # 不能改用首页路由：浏览器已有失效端点时，首页会跳过自动连接。
+    fragment = urllib.parse.urlencode({'hostname': '127.0.0.1', 'port': port,
+                                      'http': 'true', 'secret': secret})
+    return address + '/ui/#/setup?' + fragment
 
 
 def redact(message):

@@ -4,7 +4,9 @@ import os
 import json
 import sys
 import threading
+import time
 import runtime
+from node_checks import node_rows
 from pathlib import Path
 
 import gi
@@ -14,7 +16,7 @@ gi.require_version('Adw', '1')
 from gi.repository import Adw, Gio, GLib, Gtk, Pango
 
 from runtime import (ASSETS, ENV, ROOT, SWITCH_BIN,
-                     UNITS, LogFollower, LogStore, command, delay_test, load_env,
+                     UNITS, LogFollower, LogStore, command, check_nodes, load_env,
                      mihomo_get, put_node, query_status, run_switch)
 from tray import Tray
 
@@ -166,10 +168,16 @@ class MainWindow(Adw.ApplicationWindow):
         page = self._page('nodes', '代理节点', '查看当前选择；切换失败时可在实时日志中查看原因。')
         self.nodes_summary = label('启动代理后显示候选节点', 'detail', True)
         self.nodes_summary.set_hexpand(True)
-        self.delay_btn = button('测试延迟', self.on_delay_clicked, 'network-transmit-symbolic')
-        self.panel_btn = button('高级面板', self.open_panel, 'external-link-symbolic')
-        self.panel_btn.set_tooltip_text('仅在当前部署已安装 metacubexd 时可用')
+        self.delay_btn = button('检测 ChatGPT', self.on_delay_clicked, 'network-transmit-symbolic')
+        self.panel_btn = button('高级管理', self.open_panel, 'external-link-symbolic')
+        self.panel_btn.set_tooltip_text('在浏览器查看详细连接与规则，自动连接本机，无需手填地址或密钥')
         page.append(box(self.nodes_summary, self.delay_btn, self.panel_btn, vertical=False))
+        self.show_all_nodes = Gtk.CheckButton(label='查看全部节点（含未检测和失败）')
+        self.show_all_nodes.connect('toggled', lambda *_: self._update_nodes(self.app.status))
+        page.append(self.show_all_nodes)
+        page.append(label('默认仅显示 5 分钟内公开端点可达的节点，按检测耗时排序。检测不切换当前节点；'
+                          '通过不保证账号登录、对话或 API 请求成功。', 'detail', True))
+        page.append(label('“高级管理”用于查看详细连接和规则；日常切换节点可直接在下方操作。', 'detail', True))
         self.node_list = Gtk.ListBox(css_classes=['nodes'], selection_mode=Gtk.SelectionMode.NONE)
         self.node_list.connect('row-activated', self.on_node_activated)
         page.append(self.node_list)
@@ -461,33 +469,49 @@ class MainWindow(Adw.ApplicationWindow):
                 value.set_text('节点已变更，请重新检测')
             self.website_checked_node = None
         ui = Path(ENV.get('MIHOMO_CONF_DIR', Path.home() / '.config/mihomo')) / 'ui'
-        self.panel_btn.set_sensitive(bool(status.get('running')) and (ui / 'index.html').is_file())
+        self.panel_btn.set_sensitive(not self.app.busy and bool(status.get('running')) and (ui / 'index.html').is_file())
         self._update_nodes(status)
 
     def _update_nodes(self, status):
         names = tuple(n for n in status.get('nodes', []) if n not in ('DIRECT', 'REJECT'))
-        self.node_empty.set_visible(not names)
-        self.nodes_summary.set_text(f"{len(names)} 个候选 · 当前 {status.get('group_now') or '未选择'}")
-        if names != self.node_names:
-            self.node_names = names
+        rows = node_rows(names, self.delay_cache, status.get('node_check_generation'),
+                         self.show_all_nodes.get_active())
+        visible = tuple(item['name'] for item in rows)
+        count = len(node_rows(names, self.delay_cache, status.get('node_check_generation')))
+        self.node_empty.set_visible(not visible)
+        self.node_empty.set_text('暂无节点。请先开启代理；首次使用请到“工具与设置”配置订阅。' if not names else
+                                 '暂无近期检测可达的节点。请点击“检测 ChatGPT”，或勾选“查看全部节点”。')
+        self.nodes_summary.set_text(f"{count} 个近期可达 / {len(names)} 个订阅候选 · 当前 {status.get('group_now') or '未选择'}")
+        if visible != self.node_names:
+            self.node_names = visible
             while self.node_list.get_first_child():
                 self.node_list.remove(self.node_list.get_first_child())
             self.node_rows.clear()
-            for name in names:
+            for name in visible:
                 title = label(name)
                 title.set_ellipsize(Pango.EllipsizeMode.END)
                 title.set_hexpand(True)
                 title.set_tooltip_text(name)
+                checked_at = label('', 'detail', True)
                 chip = label('', 'pill')
+                chip.set_wrap(True)
+                chip.set_max_width_chars(24)
                 row = Gtk.ListBoxRow(activatable=True)
                 row.node_name = name
-                row.set_child(box(Gtk.Image(icon_name='network-server-symbolic'), title, chip, vertical=False))
+                row.set_child(box(Gtk.Image(icon_name='network-server-symbolic'),
+                                  box(title, checked_at, spacing=4, hexpand=True), chip, vertical=False))
                 self.node_list.append(row)
-                self.node_rows[name] = (row, chip)
-        for name, (row, chip) in self.node_rows.items():
-            current, delay = name == status.get('group_now'), self.delay_cache.get(name)
-            chip.set_text(('当前 · ' if current else '') + (f'{delay} ms' if delay else '未测速'))
-            chip.set_css_classes(['pill'] + (['success'] if current else []))
+                self.node_rows[name] = (row, chip, checked_at)
+        for item in rows:
+            name = item['name']
+            row, chip, checked_at = self.node_rows[name]
+            current = name == status.get('group_now')
+            text = item['state'] + (f" · {item['milliseconds']} ms" if item['ok'] else '')
+            chip.set_text(('当前 · ' if current else '') + text)
+            checked = time.strftime('%H:%M:%S', time.localtime(item['checked_at'])) if item['checked_at'] else '—'
+            checked_at.set_text('检测于 ' + checked if item['checked_at'] else '点击“检测 ChatGPT”检查公开端点')
+            chip.set_tooltip_text('检测时间：' + checked + '；耗时为两个公开端点完整检测的总耗时')
+            chip.set_css_classes(['pill'] + (['success'] if item['ok'] else []))
             row.set_sensitive(not self.app.busy)
 
     def on_power_clicked(self, *_):
@@ -503,11 +527,41 @@ class MainWindow(Adw.ApplicationWindow):
         def finished(result):
             self.delay_cache = result
             self._update_nodes(self.app.status)
-            self.toast('延迟测试完成' if result else '无可用测速结果，请查看服务状态')
-        self.app.task(delay_test, finished, '正在测试延迟…')
+            count = sum(item['ok'] is True for item in result['results'].values())
+            self.toast(f'ChatGPT 检测完成：{count} / {len(result["results"])} 个公开端点可达')
+        self.app.task(check_nodes, finished, '正在逐节点检测 ChatGPT 公开端点…')
 
     def open_panel(self, *_):
-        Gtk.UriLauncher.new(f'http://127.0.0.1:{runtime.API_PORT}/ui/').launch(self, None, None, None)
+        def prepare():
+            try:
+                return runtime.panel_connection_url(), None
+            except RuntimeError as exc:
+                return None, str(exc)
+
+        def failed(message):
+            self.toast(message)
+            self.app.logs.add('操作', message, 'ERROR')
+
+        def opened(source, result):
+            try:
+                source.launch_finish(result)
+            except GLib.Error:
+                # 桌面错误可能包含带认证片段的 URI，不记录异常原文。
+                failed('浏览器未能打开高级管理。请检查系统默认浏览器设置后重试。')
+            else:
+                self.toast('已打开高级管理，正在自动连接本机。')
+
+        def launch(result):
+            url, error = result
+            if error:
+                failed(error)
+                return
+            try:
+                Gtk.UriLauncher.new(url).launch(self, None, opened)
+            except GLib.Error:
+                failed('浏览器未能打开高级管理。请检查系统默认浏览器设置后重试。')
+
+        self.app.task(prepare, launch, '正在连接本机高级管理…')
 
     def configure(self, *_):
         if ENV:
