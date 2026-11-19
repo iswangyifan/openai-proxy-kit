@@ -84,6 +84,34 @@ class WebsiteTests(unittest.TestCase):
             self.assertEqual(second['rules'][:len(websites.PRIVATE_RULES)], websites.PRIVATE_RULES)
             self.assertEqual(second['rules'][-1], 'MATCH,DIRECT')
 
+    def test_managed_rules_override_legacy_rules_and_disabled_presets_are_direct(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _, value, _ = self.fixture(tmp)
+            value['rules'] = [
+                'DOMAIN-SUFFIX,youtube.com,Legacy',
+                'DOMAIN-SUFFIX,github.com,Legacy',
+                'DOMAIN-SUFFIX,corp.example,DIRECT',
+                'MATCH,DIRECT',
+            ]
+            profile = {'enabled': ['youtube'], 'domains': ['api.github.com']}
+            merged = websites.merge_rules(value, profile, 'Test')
+            rules = merged['rules']
+            self.assertLess(rules.index('DOMAIN-SUFFIX,youtube.com,Test'),
+                            rules.index('DOMAIN-SUFFIX,youtube.com,Legacy'))
+            self.assertLess(rules.index('DOMAIN-SUFFIX,github.com,DIRECT'),
+                            rules.index('DOMAIN-SUFFIX,github.com,Legacy'))
+            self.assertLess(rules.index('DOMAIN-SUFFIX,api.github.com,Test'),
+                            rules.index('DOMAIN-SUFFIX,github.com,DIRECT'))
+            self.assertIn('DOMAIN-SUFFIX,corp.example,DIRECT', rules)
+
+            disabled = websites.merge_rules(merged, {'enabled': [], 'domains': []}, 'Test', profile)['rules']
+            self.assertLess(disabled.index('DOMAIN-SUFFIX,youtube.com,DIRECT'),
+                            disabled.index('DOMAIN-SUFFIX,youtube.com,Legacy'))
+            self.assertNotIn('DOMAIN-SUFFIX,youtube.com,Test', disabled)
+            self.assertNotIn('DOMAIN-SUFFIX,api.github.com,Test', disabled)
+            self.assertEqual(disabled.count('DOMAIN-SUFFIX,youtube.com,DIRECT'), 1)
+            self.assertEqual(disabled[-1], 'MATCH,DIRECT')
+
     def test_before_configuration_saves_private_preferences_only(self):
         with tempfile.TemporaryDirectory() as tmp:
             env = {'INSTALL_HOME': tmp}
@@ -256,7 +284,9 @@ class WebsiteTests(unittest.TestCase):
                 self.assertEqual(websites.api(env, '/proxies/Test')['now'], 'B')
                 with patch.object(websites.subprocess, 'run', side_effect=commands):
                     websites.apply_profile(env, {'enabled': [], 'domains': []})
-                self.assertFalse(any(r.get('payload') == 'github.com' for r in websites.api(env, '/rules')['rules']))
+                rules = websites.api(env, '/rules')['rules']
+                github = next(r for r in rules if r.get('payload') == 'github.com')
+                self.assertEqual(github['proxy'], 'DIRECT')
             finally:
                 process.terminate()
                 try:

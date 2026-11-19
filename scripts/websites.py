@@ -108,15 +108,18 @@ def merge_rules(config, profile, group, previous=None):
     if not any(g.get('name') == group for g in config.get('proxy-groups', [])):
         raise ValueError('找不到当前代理组，请先完成订阅配置')
     managed = {d for domains in PRESETS.values() for d in domains}
-    managed.update((previous or {}).get('domains', []))
     remove = {f'DOMAIN-SUFFIX,{d},{group}' for d in managed}
+    remove.update(f'DOMAIN-SUFFIX,{d},DIRECT' for d in managed)
+    remove.update(f'DOMAIN-SUFFIX,{d},{group}' for d in (previous or {}).get('domains', []))
     keep = [r for r in config['rules'] if isinstance(r, str) and r not in remove and
             r not in PRIVATE_RULES and not r.startswith('MATCH,')]
-    additions = [f'DOMAIN-SUFFIX,{domain},{group}' for key in profile['enabled'] for domain in PRESETS[key]]
-    additions += [f'DOMAIN-SUFFIX,{domain},{group}' for domain in profile['domains']]
-    # 私有地址优先，新增网站不会把默认直连变成全局代理。
+    # 自定义域名独立生效，优先于预设关闭时添加的 DIRECT。
+    additions = [f'DOMAIN-SUFFIX,{domain},{group}' for domain in profile['domains']]
+    additions += [f'DOMAIN-SUFFIX,{domain},{group if key in profile["enabled"] else "DIRECT"}'
+                  for key, domains in PRESETS.items() for domain in domains]
+    # kit 管理的域名优先于保留的旧规则；其余流量仍默认直连。
     mandatory = [f'DOMAIN-SUFFIX,{domain},{group}' for domain in OPENAI_DOMAINS]
-    config['rules'] = list(dict.fromkeys(PRIVATE_RULES + mandatory + keep + additions + ['MATCH,DIRECT']))
+    config['rules'] = list(dict.fromkeys(PRIVATE_RULES + mandatory + additions + keep + ['MATCH,DIRECT']))
     return config
 
 
