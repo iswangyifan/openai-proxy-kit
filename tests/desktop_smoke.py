@@ -20,6 +20,7 @@ from gi.repository import Adw, Gio, GLib
 gui.query_status = lambda: {
     'phase': 'off', 'running': False, 'installed': False, 'sys_proxy': 'none',
     'proxy_owned': False, 'services': {}, 'nodes': [], 'group_now': None,
+    'disk_mode': None, 'api_mode': None, 'api_available': False, 'node_check_generation': None,
     'injected': 0, 'checked_at': '离线测试',
 }
 app = gui.KitApp()
@@ -69,8 +70,17 @@ def check():
             return False
         app.window.apply_status(gui.query_status())
         assert app.window.state_title.get_text() == '代理已关闭'
+        assert app.window.openai_value.get_text() == '未检测'
         assert not app.window.power_btn.get_sensitive()
         assert app.window.stack.get_child_by_name('logs') is not None
+        direct = dict(gui.query_status(), installed=True, disk_mode='direct', api_mode='direct',
+                      services={'mihomo': True, 'controller': False, 'guard': False})
+        app.window.apply_status(direct)
+        assert app.window.state_pill.get_text() == '直连模式'
+        assert app.window.proxy_value.get_text() == '直连'
+        assert app.window.service_value.get_text() == '核心运行中'
+        assert not app.window.openai_btn.get_sensitive()
+        assert app.window.state_pill.get_text() != '已连接'
         app.window.apply_status(dict(gui.query_status(), phase='partial', installed=True,
             services={'mihomo': True}, api_available=False, issues=['节点读取失败：测试错误说明']))
         assert app.window.current_node.get_text() == '节点读取失败'
@@ -201,7 +211,9 @@ def website_saved():
         assert value['enabled'] == ['github'] and value['domains'] == ['extra.example']
         assert not app.window.site_dirty
         assert not app.window.website_check.get_sensitive(), '配置订阅前不可检测'
-        assert app.window.stack.get_visible_child_name() == 'websites'
+        assert app.window.stack.get_visible_child_name() == 'websites', (
+            app.window.stack.get_visible_child_name(), app.window.nav.get_selected_row().get_index(),
+            [(entry.source, entry.message) for entry in app.logs.snapshot()])
         app.paintable = gui.Gtk.WidgetPaintable.new(app.window)
         app.window.set_default_size(1080, 740)
         app.window.present()
@@ -224,14 +236,17 @@ def website_capture():
         assert '第 1 行' in app.window.sites_message.get_text()
         assert profile.read_bytes() == before, '无效输入不得覆盖已保存设置'
         app.window.reload_site_profile()
-        active = dict(gui.query_status(), running=True, phase='on', installed=True, group_now='示例节点 A')
+        active = dict(gui.query_status(), running=True, phase='on', installed=True, group_now='示例节点 A',
+                      disk_mode='rule', api_mode='rule', sys_proxy='manual', proxy_owned=True,
+                      services={'mihomo': True, 'controller': True, 'guard': True},
+                      node_check_generation='site-generation')
         gui.query_status = lambda: active
         app.status = active
         app._publish()
-        gui.runtime.check_websites = lambda: {
+        gui.runtime.check_websites = Mock(return_value={
             'openai': {'ok': True, 'detail': '公开端点可达'},
             'github': {'ok': False, 'detail': 'HTTP 403 或响应不符合预期'},
-            'youtube': {'ok': None, 'detail': '预设未启用'}}
+            'youtube': {'ok': None, 'detail': '预设未启用'}})
         app.window.website_check.emit('clicked')
         assert app.busy and not app.window.website_save.get_sensitive()
         GLib.timeout_add(100, website_detected)
@@ -245,10 +260,83 @@ def website_detected():
     if app.busy:
         return True
     try:
+        active = app.status
         assert app.window.website_results['openai'].get_text() == '公开端点可达'
         assert '403' in app.window.website_results['github'].get_text()
         assert app.window.website_results['youtube'].get_text() == '预设未启用'
         assert app.window.website_save.get_sensitive()
+        assert app.window.openai_value.get_text() == '成功', '网站检测应同步 OpenAI 缓存'
+        gui.runtime.check_websites.assert_called_once_with()
+        for _ in range(3):
+            app.window.apply_status(active)
+        assert gui.runtime.check_websites.call_count == 1, '刷新不得重复探测公开端点'
+        app.window._store_openai_result({'ok': False, 'detail': '公开端点检测失败'},
+                                       app.window._openai_context(active))
+        assert app.window.openai_value.get_text() == '失败'
+        direct = dict(active, running=False, phase='off', disk_mode='direct', api_mode='direct',
+                      sys_proxy='none', proxy_owned=False,
+                      services={'mihomo': True, 'controller': False, 'guard': False})
+        for changed in (dict(active, group_now='示例节点 B'),
+                        dict(active, node_check_generation='changed'), direct):
+            app.window._store_openai_result({'ok': True, 'detail': '公开端点可达'},
+                                           app.window._openai_context(active))
+            app.window.apply_status(changed)
+            assert app.window.openai_value.get_text() == '未检测'
+            assert app.window.website_results['openai'].get_text() == '未检测'
+            gui.runtime.check_websites.assert_called_once_with()
+        assert not app.window.openai_btn.get_sensitive()
+        assert not app.window.website_check.get_sensitive()
+        app.status = active
+        app.window.apply_status(active)
+        with patch.object(app, 'task', side_effect=lambda work, completed, title: completed(work())):
+            app.window.check_openai()
+        assert gui.runtime.check_websites.call_count == 2, '只有手动检测才增加公开端点请求'
+        assert app.window.openai_value.get_text() == '成功'
+        with patch.object(app, 'quit') as quit_app:
+            app._verify_stopped(direct)
+            quit_app.assert_called_once_with()
+        full_stop = dict(direct, disk_mode='rule', api_mode=None,
+                         services={'mihomo': False, 'controller': False, 'guard': False})
+        with patch.object(app, 'quit') as quit_app:
+            app._verify_stopped(full_stop)
+            quit_app.assert_called_once_with()
+        rejected = (
+            dict(direct, services={'mihomo': True, 'controller': True, 'guard': False}),
+            dict(direct, services={'mihomo': True, 'controller': False, 'guard': True}),
+            dict(direct, proxy_owned=True), dict(direct, injected=1), dict(direct, api_mode='rule'),
+        )
+        for status in rejected:
+            with patch.object(app, 'quit') as quit_app:
+                app._verify_stopped(status)
+                quit_app.assert_not_called()
+        app.status = active
+        app.window.apply_status(active)
+        app.window.show_page('overview')
+        app.window.set_default_size(820, 740)
+        GLib.timeout_add(400, compact_overview)
+    except Exception as exc:
+        errors.append(exc)
+        app.quit()
+    return False
+
+
+def compact_overview():
+    try:
+        assert app.window.get_width() <= 820, '仪表盘不应撑破窄窗口'
+        assert app.window.overview_hero.get_height() < 210, '主控区域不能被状态卡撑高'
+        capture('dashboard-compact-narrow.png')
+        app.window.set_default_size(1080, 740)
+        GLib.timeout_add(400, overview_wide)
+    except Exception as exc:
+        errors.append(exc)
+        app.quit()
+    return False
+
+
+def overview_wide():
+    try:
+        assert app.window.overview_hero.get_height() < 170
+        capture('dashboard-compact.png')
         # 不启动真实浏览器，验证自动认证 URI 和启动失败反馈均不泄露密钥。
         url = 'http://127.0.0.1:19097/ui/#/setup?secret=SYNTHETIC_PANEL_SECRET'
         launcher = Mock()

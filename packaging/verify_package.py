@@ -20,7 +20,7 @@ with tempfile.TemporaryDirectory() as temporary:
     subprocess.run(['dpkg-deb', '--extract', str(package), temporary], check=True)
     app = unpacked / 'usr/lib/openai-proxy-kit'
     doc = unpacked / 'usr/share/doc/openai-proxy-kit'
-    for name in ('kit_state.py', 'system_proxy.py', 'package_cleanup.py', 'runtime.py', 'gui.py', 'tray.py', 'route_engine.py', 'route_model.py', 'websites.py', 'node_checks.py'):
+    for name in ('kit_state.py', 'system_proxy.py', 'package_cleanup.py', 'runtime.py', 'gui.py', 'tray.py', 'route_engine.py', 'route_model.py', 'websites.py', 'mihomo_mode.py', 'node_checks.py'):
         assert (app / 'scripts' / name).read_bytes() == (ROOT / 'scripts' / name).read_bytes(), name
     assert not (app / 'libexec/geodata').exists()
     assert not list(app.rglob('*.mjs'))

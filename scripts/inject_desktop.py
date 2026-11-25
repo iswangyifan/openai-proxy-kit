@@ -10,7 +10,7 @@
   - 永不修改 /usr/share/applications 系统文件，只生成用户级覆盖版
   - 若目标 .desktop 原本就在用户目录，先备份到 backup 目录再原地修改
   - 注入/还原状态记录在 manifest.json，供 uninstall 还原
-  - 幂等: 已注入（含 marker 注释）的文件跳过
+  - 幂等: 已注入文件校验归属后从原备份重建，不叠加代理前缀
 
 动作语义:
   - inject / restore : 安装 / 卸载（restore 清空 manifest）
@@ -21,7 +21,9 @@
 import argparse
 import hashlib
 import json
+import os
 import re
+import shlex
 import shutil
 import sys
 from pathlib import Path
@@ -30,8 +32,10 @@ from kit_state import private_write
 MARKER = "# openai-proxy-kit injected"
 ENV_PREFIX_TMPL = (
     "http_proxy={proxy} https_proxy={proxy} HTTP_PROXY={proxy} HTTPS_PROXY={proxy} "
-    "no_proxy=localhost,127.0.0.1 NO_PROXY=localhost,127.0.0.1"
+    "no_proxy={no_proxy} NO_PROXY={no_proxy}"
 )
+NO_PROXY_DEFAULTS = ("localhost", "127.0.0.1")
+NO_PROXY_NAMES = {"no_proxy", "NO_PROXY"}
 
 
 def die(msg: str):
@@ -56,19 +60,109 @@ def is_injected(text: str) -> bool:
     return MARKER in text
 
 
-def inject_text(text: str, proxy: str) -> str:
+def _merge_no_proxy(*values) -> list[str]:
+    merged = list(NO_PROXY_DEFAULTS)
+    seen = set(merged)
+    for value in values:
+        items = value if isinstance(value, (list, tuple)) else str(value or '').split(',')
+        for item in items:
+            item = item.strip()
+            if item and item not in seen:
+                seen.add(item)
+                merged.append(item)
+    return merged
+
+
+def _environment_no_proxy() -> list[str]:
+    return _merge_no_proxy(os.environ.get('no_proxy'), os.environ.get('NO_PROXY'))
+
+
+def _token_spans(text: str):
+    """只定位 token 边界，原始命令文本不参与 shlex 重建。"""
+    start = None
+    quote = None
+    escaped = False
+    for index, char in enumerate(text):
+        if start is None:
+            if not char.isspace():
+                start = index
+            else:
+                continue
+        if escaped:
+            escaped = False
+        elif char == '\\' and quote != "'":
+            escaped = True
+        elif quote:
+            if char == quote:
+                quote = None
+        elif char in "'\"":
+            quote = char
+        elif char.isspace():
+            yield start, index
+            start = None
+    if start is not None:
+        yield start, len(text)
+
+
+def _env_assignment(token: str):
+    try:
+        parts = shlex.split(token, comments=False, posix=True)
+    except ValueError:
+        return None
+    if len(parts) != 1:
+        return None
+    match = re.fullmatch(r'([A-Za-z_][A-Za-z0-9_]*)=(.*)', parts[0], re.DOTALL)
+    return match.groups() if match else None
+
+
+def _inject_exec_env(cmd: str, proxy: str, no_proxy_baseline: list[str]) -> str:
+    spans = list(_token_spans(cmd))
+    has_env = bool(spans) and cmd[spans[0][0]:spans[0][1]] in ('env', '/usr/bin/env')
+    original_values = []
+    removals = []
+    if has_env:
+        for start, end in spans[1:]:
+            assignment = _env_assignment(cmd[start:end])
+            if assignment is None:
+                break
+            name, value = assignment
+            if name in NO_PROXY_NAMES:
+                original_values.append(value)
+                while end < len(cmd) and cmd[end] in ' \t':
+                    end += 1
+                removals.append((start, end))
+
+    filtered = cmd
+    if removals:
+        pieces, cursor = [], 0
+        for start, end in removals:
+            pieces.append(cmd[cursor:start])
+            cursor = end
+        pieces.append(cmd[cursor:])
+        filtered = ''.join(pieces)
+
+    no_proxy = ','.join(_merge_no_proxy(*original_values, no_proxy_baseline))
+    env_vars = ENV_PREFIX_TMPL.format(proxy=proxy, no_proxy=no_proxy)
+    if has_env:
+        env_end = spans[0][1]
+        return f"{filtered[:env_end]} {env_vars}{filtered[env_end:]}"
+    return f"env {env_vars} {filtered}"
+
+
+def inject_text(text: str, proxy: str, no_proxy_baseline=None) -> str:
     """给所有 Exec= 行加 env 前缀（含 [Desktop Action] 段内的）"""
-    env_vars = ENV_PREFIX_TMPL.format(proxy=proxy)
+    if no_proxy_baseline is None:
+        no_proxy_baseline = _environment_no_proxy()
     lines = text.splitlines(keepends=True)
     out, marker_added = [], False
     for ln in lines:
         stripped = ln.strip()
-        if stripped.startswith("Exec=") and not stripped.startswith("Exec=env http_proxy="):
+        if stripped.startswith("Exec="):
             indent = ln[:len(ln) - len(ln.lstrip())]
             cmd = stripped[len("Exec="):]
             out.append(f"{MARKER}\n")
             marker_added = True
-            out.append(f"{indent}Exec=env {env_vars} {cmd}\n")
+            out.append(f"{indent}Exec={_inject_exec_env(cmd, proxy, no_proxy_baseline)}\n")
         else:
             out.append(ln)
     if not marker_added:
@@ -88,42 +182,58 @@ def do_inject(args, src: Path, proxy: str, user_apps: Path, backup_dir: Path, ma
     if not src.is_file():
         die(f"desktop 文件不存在: {src}")
 
-    text = src.read_text(encoding="utf-8")
-    if is_injected(text):
-        print(f"[inject_desktop] 跳过（已注入）: {src.name}")
-        return
-
     target, in_place = resolve_target(src, user_apps)
-
     existing = manifest["injected"].get(str(target))
-    if target.exists() and is_injected(target.read_text(encoding='utf-8')):
+    target_data = target.read_bytes() if target.exists() else None
+    if target_data is not None and is_injected(target_data.decode('utf-8')):
         if not existing:
             die(f"启动器已有代理标记但缺少恢复记录，保留文件：{target.name}")
         digest = existing.get('injected_sha256')
-        if digest and hashlib.sha256(target.read_bytes()).hexdigest() != digest:
+        if not digest or hashlib.sha256(target_data).hexdigest() != digest:
             die(f"启动器注入后已被编辑，保留文件：{target.name}")
-        print(f"[inject_desktop] 跳过（用户覆盖已注入）: {target.name}")
-        return
-    if existing and target.exists() and not is_injected(target.read_text(encoding='utf-8')):
-        backup = Path(existing['backup'])
-        if backup.exists() and target.read_bytes() != backup.read_bytes():
+
+    if existing:
+        # 活跃注入和停用后的重启用都以首次备份为准，保留恢复归属。
+        backup_path = Path(existing['backup']) if existing.get('backup') else None
+        if backup_path is None or not backup_path.is_file():
+            die(f"启动器备份缺失，保留文件：{target.name}")
+        original_data = backup_path.read_bytes()
+        text = backup_path.read_text(encoding='utf-8')
+        if is_injected(text):
+            die(f"启动器备份含代理标记，保留文件：{target.name}")
+        if target_data is not None and not is_injected(target_data.decode('utf-8')) and target_data != original_data:
             die(f"启动器已被用户修改，保留原文件，请重新选择适配：{target.name}")
-    original_exists = target.exists()
-    original = target if original_exists else src
-    text = original.read_text(encoding='utf-8')
-    backup_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-    suffix = '.user.orig' if original_exists and not in_place else '.orig'
-    backup_path = backup_dir / f"{src.name}{suffix}"
-    if not backup_path.exists():
-        shutil.copy2(original, backup_path)
-        backup_path.chmod(0o600)
-    new_text = inject_text(text, proxy)
+        record = dict(existing)
+    else:
+        original_exists = target_data is not None
+        original = target if original_exists else src
+        text = original.read_text(encoding='utf-8')
+        if is_injected(text):
+            die(f"启动器已有代理标记但缺少恢复记录，保留文件：{target.name}")
+        backup_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        suffix = '.user.orig' if original_exists and not in_place else '.orig'
+        backup_path = backup_dir / f"{src.name}{suffix}"
+        if backup_path.exists():
+            if backup_path.read_bytes() != original.read_bytes():
+                die(f"启动器备份与原文件不一致，保留文件：{target.name}")
+        else:
+            shutil.copy2(original, backup_path)
+            backup_path.chmod(0o600)
+        record = {
+            "source": str(src), "in_place": in_place,
+            "restore_original": original_exists, "backup": str(backup_path),
+        }
+    if existing and 'no_proxy_baseline' in existing:
+        no_proxy_baseline = _merge_no_proxy(existing['no_proxy_baseline'])
+    else:
+        no_proxy_baseline = _environment_no_proxy()
+    new_text = inject_text(text, proxy, no_proxy_baseline)
     private_write(target, new_text)
-    manifest["injected"][str(target)] = {
-        "source": str(src), "in_place": in_place,
-        "restore_original": original_exists, "backup": str(backup_path),
+    record.update({
         "injected_sha256": hashlib.sha256(new_text.encode()).hexdigest(),
-    }
+        "no_proxy_baseline": no_proxy_baseline,
+    })
+    manifest["injected"][str(target)] = record
     print(f"[inject_desktop] 已注入: {src.name} → {target}"
           f"{'（用户级覆盖）' if not in_place else '（原地，已备份）'}")
 
@@ -145,12 +255,12 @@ def do_disable(user_apps: Path, backup_dir: Path, manifest: dict) -> int:
             if restore:
                 if not b.is_file():
                     die(f"启动器备份缺失，保留文件：{t.name}")
-                private_write(t, b.read_text(encoding='utf-8'))
+                private_write(t, b.read_bytes().decode('utf-8'))
             else:
                 t.unlink()
             count += 1
         elif restore and b.is_file():
-            private_write(t, b.read_text(encoding='utf-8'))
+            private_write(t, b.read_bytes().decode('utf-8'))
     print(f"[inject_desktop] 已停用 {count} 个启动器，用户原配置保留")
     return count
 
@@ -170,10 +280,7 @@ def do_enable(args, user_apps: Path, backup_dir: Path, manifest: dict) -> int:
         if not src.is_file():
             print(f"[inject_desktop] 跳过（源文件已不存在）: {src}")
             continue
-        original_record = dict(info)
         do_inject(args, src, args.proxy, user_apps, backup_dir, manifest)
-        manifest['injected'][target]['restore_original'] = original_record.get('restore_original', original_record.get('in_place', False))
-        manifest['injected'][target]['backup'] = original_record['backup']
         count += 1
     print(f"[inject_desktop] 恢复完成（{count} 个）")
     return count

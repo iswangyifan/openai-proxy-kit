@@ -6,18 +6,13 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from test_switch import STUB
+from test_switch import ApiHandler, STUB
+from http.server import ThreadingHTTPServer
+import threading
+import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 FULL_STUB = STUB.replace("if name == 'systemctl':", '''if name == 'systemctl':
-    if 'enable' in args and 'mihomo-kit.service' in args:
-        state['active'] = True
-        state['listening'] = True
-        Path(os.environ['OPK_STUB_STATE']).write_text(json.dumps(state))
-    if 'disable' in args and 'mihomo-kit.service' in args:
-        state['active'] = False
-        state['listening'] = False
-        Path(os.environ['OPK_STUB_STATE']).write_text(json.dumps(state))
     if 'enable' in args and 'proxy-guard-kit.timer' in args:
         import shlex, subprocess
         units = Path.home() / '.config/systemd/user'
@@ -98,11 +93,18 @@ esac
             controller.write_text('#!/bin/sh\nexit 0\n'); controller.chmod(0o755)
             subscription = home / 'sub.yaml'
             subscription.write_text('proxies:\n- name: Synthetic\n  type: ss\n  server: 127.0.0.1\n  port: 443\n  cipher: aes-128-gcm\n  password: SYNTHETIC_ONLY\n')
-            (home / 'state').write_text(json.dumps({'host': '', 'port': 0, 'mode': 'none'}))
+            (home / 'state').write_text(json.dumps({'host': '', 'port': 0, 'mode': 'none', 'runtime_mode': 'rule'}))
+            server = ThreadingHTTPServer(('127.0.0.1', 0), ApiHandler)
+            server.state_path = home / 'state'
+            worker = threading.Thread(target=server.serve_forever, daemon=True)
+            worker.start()
+            self.addCleanup(server.server_close)
+            self.addCleanup(worker.join, timeout=5)
+            self.addCleanup(server.shutdown)
             env = dict(os.environ, HOME=tmp, XDG_CONFIG_HOME=str(home / '.config'),
                        PATH=str(binary) + ':/usr/bin:/bin', OPK_STUB_STATE=str(home / 'state'),
                        OPK_STUB_CALLS=str(home / 'calls'), SUB_URL=str(subscription), ASSUME_YES='1',
-                       MIHOMO_BIN=str(core), MIXED_PORT='17890', API_PORT='19090', DNS_PORT='1153',
+                       MIHOMO_BIN=str(core), MIXED_PORT='17890', API_PORT=str(server.server_port), DNS_PORT='1153',
                        CONTROLLER_BIN=str(controller), DESKTOP_INJECT='0')
             # 外部测试环境不得穿透到真实 KIT_ENV/安装目录。
             for key in ('KIT_ENV', 'INSTALL_HOME', 'MIHOMO_CONF_DIR', 'OPK_LOCK_HELD', 'SHADOW', 'MIHOMO_SECRET'):
@@ -114,15 +116,36 @@ esac
             self.assertTrue(conf.exists())
             self.assertFalse((home / '.config/mihomo').exists())
             self.assertEqual(json.loads((home / 'state').read_text())['mode'], 'manual')
+            self.assertTrue(yaml.safe_load(conf.read_text())['dns']['enable'])
             stopped = subprocess.run(['bash', str(ROOT / 'scripts/switch.sh'), 'stop'], env=env,
                                      capture_output=True, text=True, timeout=15)
             self.assertEqual(stopped.returncode, 0, stopped.stdout + stopped.stderr)
+            repeated = subprocess.run(['bash', str(ROOT / 'scripts/switch.sh'), 'stop'], env=env,
+                                      capture_output=True, text=True, timeout=15)
+            self.assertEqual(repeated.returncode, 0, repeated.stdout + repeated.stderr)
             state = json.loads((home / 'state').read_text())
             self.assertEqual(state['mode'], 'none')
-            self.assertFalse(state['active'])
+            self.assertTrue(state['active'], '日常 stop 保持 direct 核心常驻')
+            self.assertTrue(state['listening'])
+            self.assertEqual(state['runtime_mode'], 'direct')
+            self.assertEqual(yaml.safe_load(conf.read_text())['mode'], 'direct')
+            self.assertFalse(yaml.safe_load(conf.read_text())['dns']['enable'], 'direct 使用系统 resolver')
+
+            (home / 'calls').write_text('')
+            updated = subprocess.run(['bash', str(ROOT / 'install.sh'), 'update'], env=env,
+                                     capture_output=True, text=True, timeout=30)
+            self.assertEqual(updated.returncode, 0, updated.stdout + updated.stderr)
+            self.assertEqual(yaml.safe_load(conf.read_text())['mode'], 'direct', '订阅更新继承 direct')
+            self.assertFalse(yaml.safe_load(conf.read_text())['dns']['enable'], '订阅更新保持系统 resolver')
+            update_calls = (home / 'calls').read_text()
+            self.assertIn('restart mihomo-kit.service', update_calls)
+            self.assertNotIn('start opk-route.service', update_calls)
+            self.assertNotIn('restart opk-route.service', update_calls)
+
             cleanup = subprocess.run([sys.executable, str(ROOT / 'scripts/package_cleanup.py'), '--user'],
                                      env=env, capture_output=True, text=True, timeout=15)
             self.assertEqual(cleanup.returncode, 0, cleanup.stdout + cleanup.stderr)
+            self.assertFalse(json.loads((home / 'state').read_text())['active'], '卸载走 full-stop 彻底停核心')
             self.assertTrue(conf.exists(), '卸载保留私有配置')
             self.assertFalse((home / '.local/share/openai-proxy-kit/kit.env').exists())
             self.assertEqual(list((home / '.config/systemd/user').glob('*kit*')), [])

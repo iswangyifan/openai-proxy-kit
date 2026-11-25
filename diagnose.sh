@@ -38,21 +38,36 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-phase "诊断 openai-proxy-kit（mihomo=$MIXED_PORT API=$API_PORT probe=$PROBE_PORT_BASE+）"
+SAVED_MODE=rule
+if [ -f "$KIT_ENV" ] && [ -f "$MIHOMO_CONF_DIR/config.yaml" ]; then
+    SAVED_MODE=$(python3 "$SCRIPT_DIR/scripts/mihomo_mode.py" --state "$KIT_ENV" get 2>/dev/null) || SAVED_MODE=invalid
+fi
+[ "$SAVED_MODE" != invalid ] || fail "核心配置的 mode 无效或不受支持"
+
+phase "诊断 openai-proxy-kit（mihomo=$MIXED_PORT API=$API_PORT probe=$PROBE_PORT_BASE+ mode=$SAVED_MODE）"
 
 # ---------- 1. 服务状态 ----------
 echo "── 1. systemd 服务 ──"
-for u in "$UNIT_MIHOMO" "$UNIT_CONTROLLER"; do
-    if systemctl --user is-active --quiet "$u" 2>/dev/null; then
-        pass "$u: active"
-    elif systemctl --user list-unit-files "$u" 2>/dev/null | grep -q "$u"; then
-        fail "$u: $(systemctl --user is-active "$u" 2>/dev/null)（journalctl --user -u $u -n 30）"
-    else
-        warnf "$u: 未安装（影子模式或未装熔断器属正常）"
-    fi
-done
+if systemctl --user is-active --quiet "$UNIT_MIHOMO" 2>/dev/null; then
+    pass "$UNIT_MIHOMO: active"
+elif systemctl --user list-unit-files "$UNIT_MIHOMO" 2>/dev/null | grep -q "$UNIT_MIHOMO"; then
+    fail "$UNIT_MIHOMO: $(systemctl --user is-active "$UNIT_MIHOMO" 2>/dev/null)（journalctl --user -u $UNIT_MIHOMO -n 30）"
+else
+    warnf "$UNIT_MIHOMO: 未安装（影子模式属正常）"
+fi
+if systemctl --user is-active --quiet "$UNIT_CONTROLLER" 2>/dev/null; then
+    if [ "$SAVED_MODE" = direct ]; then fail "$UNIT_CONTROLLER: direct 模式下不应运行"; else pass "$UNIT_CONTROLLER: active"; fi
+elif [ "$SAVED_MODE" = direct ]; then
+    pass "$UNIT_CONTROLLER: direct 常驻模式下按预期停止"
+elif systemctl --user list-unit-files "$UNIT_CONTROLLER" 2>/dev/null | grep -q "$UNIT_CONTROLLER"; then
+    fail "$UNIT_CONTROLLER: $(systemctl --user is-active "$UNIT_CONTROLLER" 2>/dev/null)（journalctl --user -u $UNIT_CONTROLLER -n 30）"
+else
+    warnf "$UNIT_CONTROLLER: 未安装（影子模式或未装熔断器属正常）"
+fi
 if systemctl --user is-active --quiet "$UNIT_GUARD_TIMER" 2>/dev/null; then
-    pass "$UNIT_GUARD_TIMER: active"
+    if [ "$SAVED_MODE" = direct ]; then fail "$UNIT_GUARD_TIMER: direct 模式下不应运行"; else pass "$UNIT_GUARD_TIMER: active"; fi
+elif [ "$SAVED_MODE" = direct ]; then
+    pass "$UNIT_GUARD_TIMER: direct 常驻模式下按预期停止"
 else
     warnf "$UNIT_GUARD_TIMER: 未运行（非 GNOME/影子模式属正常）"
 fi
@@ -79,14 +94,28 @@ if GROUP_JSON=$(api_curl -fsS --noproxy '*' --max-time 5 "http://127.0.0.1:$API_
 else
     fail "API 无响应（mihomo 未运行?）"
 fi
+if CONFIG_JSON=$(api_curl -fsS --noproxy '*' --max-time 5 "http://127.0.0.1:$API_PORT/configs" 2>/dev/null); then
+    RUNTIME_MODE=$(echo "$CONFIG_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('mode','?'))" 2>/dev/null)
+    if [ "$RUNTIME_MODE" = "$SAVED_MODE" ]; then
+        pass "磁盘/API 模式一致: $SAVED_MODE"
+    else
+        fail "磁盘/API 模式不一致: $SAVED_MODE/$RUNTIME_MODE"
+    fi
+else
+    fail "无法回读核心运行模式"
+fi
 
 # ---------- 4. 连通性对比 ----------
 echo "── 4. 连通性（经代理 vs 直连） ──"
 P_CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 -x "http://127.0.0.1:$MIXED_PORT" https://chatgpt.com 2>/dev/null || echo 000)
 D_CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 --noproxy '*' https://chatgpt.com 2>/dev/null || echo 000)
 case "$P_CODE" in
-    200|301|302|307|308) pass "经代理 chatgpt.com: HTTP $P_CODE" ;;
-    *) fail "经代理 chatgpt.com: HTTP $P_CODE（节点失效? 换节点或看熔断器日志）" ;;
+    200|301|302|307|308) pass "经本地核心 chatgpt.com: HTTP $P_CODE（模式 $SAVED_MODE）" ;;
+    *) if [ "$SAVED_MODE" = direct ]; then
+           info "direct 常驻下 chatgpt.com 不可达（HTTP $P_CODE，不代表代理链路故障）"
+       else
+           fail "经代理 chatgpt.com: HTTP $P_CODE（节点失效? 换节点或看熔断器日志）"
+       fi ;;
 esac
 case "$D_CODE" in
     200|301|302|307|308) warnf "直连 chatgpt.com 也通（HTTP $D_CODE，本机网络环境特殊?）" ;;
@@ -112,7 +141,13 @@ if command -v gsettings >/dev/null 2>&1; then
     MODE=$(gsettings get org.gnome.system.proxy mode 2>/dev/null)
     H=$(gsettings get org.gnome.system.proxy.http host 2>/dev/null)
     P=$(gsettings get org.gnome.system.proxy.http port 2>/dev/null)
-    if [ "$MODE" = "'manual'" ] && [ "$H" = "'127.0.0.1'" ] && [ "$P" = "$MIXED_PORT" ]; then
+    if [ "$SAVED_MODE" = direct ]; then
+        if [ "$MODE" = "'manual'" ] && [ "$H" = "'127.0.0.1'" ] && [ "$P" = "$MIXED_PORT" ]; then
+            fail "direct 模式下系统代理仍指向本工具: 127.0.0.1:$MIXED_PORT"
+        else
+            pass "direct 模式下本工具未接管系统代理"
+        fi
+    elif [ "$MODE" = "'manual'" ] && [ "$H" = "'127.0.0.1'" ] && [ "$P" = "$MIXED_PORT" ]; then
         pass "系统代理: manual → 127.0.0.1:$MIXED_PORT"
     else
         fail "系统代理: mode=$MODE host=$H port=$P（期望 manual/127.0.0.1/$MIXED_PORT）"
@@ -128,6 +163,8 @@ if [ -n "$CHECK_PID" ]; then
     if [ -r "/proc/$CHECK_PID/environ" ]; then
         if tr '\0' '\n' < "/proc/$CHECK_PID/environ" | grep -qi '^https\?_proxy='; then
             pass "进程带代理变量: $(tr '\0' '\n' < "/proc/$CHECK_PID/environ" | grep -i '^https\?_proxy=' | head -1)"
+        elif [ "$SAVED_MODE" = direct ]; then
+            pass "direct 模式下进程无代理变量，按预期直接联网"
         else
             fail "进程无代理变量（Codex/VSCode 等不读系统代理，需桌面启动器注入）"
             info "修复: ./install.sh desktop（应用需完全退出后从应用菜单重启）"

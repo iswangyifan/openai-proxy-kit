@@ -120,6 +120,15 @@ class WebsiteTests(unittest.TestCase):
             self.assertEqual(path.stat().st_mode & 0o777, 0o600)
             self.assertEqual(websites.load_profile(path)['enabled'], ['github'])
 
+    def test_stopped_apply_preserves_direct_mode(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env, value, config = self.fixture(tmp)
+            value['mode'] = 'direct'
+            config.write_text(yaml.safe_dump(value))
+            with patch.object(websites, 'active', return_value=False):
+                websites.apply_profile(env, {'enabled': ['github']})
+            self.assertEqual(yaml.safe_load(config.read_text())['mode'], 'direct')
+
     def test_stopped_apply_does_not_start_service_and_updates_map(self):
         with tempfile.TemporaryDirectory() as tmp:
             env, _, config = self.fixture(tmp)
@@ -195,10 +204,12 @@ class WebsiteTests(unittest.TestCase):
             sub.write_text(yaml.safe_dump({'proxies': value['proxies']}))
             generated = config.parent / 'new.yaml'
             result = subprocess.run([sys.executable, str(ROOT / 'scripts/gen_config.py'), '--sub-url', str(sub),
-                '--out', str(generated), '--openai-group', 'Test', '--website-settings', str(prefs)],
+                '--out', str(generated), '--openai-group', 'Test', '--website-settings', str(prefs), '--mode', 'direct'],
                 capture_output=True, text=True, timeout=10)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn('DOMAIN-SUFFIX,github.com,Test', yaml.safe_load(generated.read_text())['rules'])
+            self.assertEqual(yaml.safe_load(generated.read_text())['mode'], 'direct')
+            self.assertFalse(yaml.safe_load(generated.read_text())['dns']['enable'])
             result = subprocess.run([sys.executable, str(ROOT / 'scripts/secure_config.py'), str(generated)],
                 env=dict(os.environ, INSTALL_HOME=env['INSTALL_HOME'], OPENAI_GROUP='Test', MIHOMO_SECRET='SYNTHETIC_NEW'),
                 capture_output=True, text=True, timeout=10)
@@ -223,6 +234,19 @@ class WebsiteTests(unittest.TestCase):
                 input='{"enabled":["github"]}', capture_output=True, text=True, timeout=5)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertTrue((state.parent / 'website-routing.json').is_file())
+
+    def test_api_accepts_explicit_method_without_changing_legacy_default(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env, _, _ = self.fixture(tmp)
+            with patch.object(websites.urllib.request, 'build_opener') as build:
+                response = build.return_value.open.return_value.__enter__.return_value
+                response.read.return_value = b'{}'
+                websites.api(env, '/configs', {'mode': 'direct'}, method='PATCH')
+                request = build.return_value.open.call_args.args[0]
+                self.assertEqual(request.get_method(), 'PATCH')
+                websites.api(env, '/proxies/Test', {'name': 'A'})
+                request = build.return_value.open.call_args.args[0]
+                self.assertEqual(request.get_method(), 'PUT')
 
     def test_public_probes_are_semantic_read_only_and_discard_node_changes(self):
         from route_model import Evidence
@@ -257,7 +281,7 @@ class WebsiteTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             env, value, config = self.fixture(tmp)
             mixed, controller = port(), port()
-            value.update({'mixed-port': mixed, 'external-controller': '127.0.0.1:' + str(controller)})
+            value.update({'mixed-port': mixed, 'external-controller': '127.0.0.1:' + str(controller), 'mode': 'direct'})
             config.write_text(yaml.safe_dump(value))
             env.update(MIHOMO_BIN=str(binary), MIXED_PORT=str(mixed), API_PORT=str(controller))
             process = subprocess.Popen([str(binary), '-d', str(config.parent)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -277,6 +301,7 @@ class WebsiteTests(unittest.TestCase):
                 with patch.object(websites.subprocess, 'run', side_effect=commands):
                     result = websites.apply_profile(env, {'enabled': ['github', 'youtube'], 'domains': ['extra.example']})
                 self.assertTrue(result['live'])
+                self.assertEqual(websites.api(env, '/configs')['mode'], 'direct', '网站热重载必须保持 direct')
                 self.assertIsNone(process.poll(), '热重载不能重启核心进程')
                 rules = websites.api(env, '/rules')['rules']
                 self.assertTrue(any(r.get('payload') == 'github.com' and r.get('proxy') == 'Test' for r in rules))

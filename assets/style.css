@@ -12,7 +12,8 @@ window.opk { background: #f5f7fb; color: #273344; }
 .page-title { font-size: 25px; font-weight: 700; }
 .page-subtitle { color: #53647a; font-size: 13px; }
 .surface { background: #edf2f8; border: 1px solid #dce4ee; border-radius: 22px; padding: 22px; }
-.hero { background: #e7f1fa; border-color: #cddfeb; padding: 28px; }
+.hero { background: #e7f1fa; border-color: #cddfeb; padding: 20px 24px; }
+.status-card { padding: 16px; border-radius: 18px; }
 .section-title { font-size: 14px; font-weight: 600; }
 .state-title { font-size: 30px; font-weight: 700; }
 .detail { color: #53647a; font-size: 13px; }

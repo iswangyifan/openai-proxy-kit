@@ -8,7 +8,7 @@
 #   ./install.sh controller        # 单独安装/补装上游路由熔断器
 #   ./install.sh desktop           # 单独注入桌面启动器代理
 #   ./install.sh gui               # 单独安装/补装桌面控制台（GTK4）
-#   ./install.sh start|stop|status # 一键开关（GUI 按钮背后的同一实现）
+#   ./install.sh start|stop|full-stop|status # 日常直连/彻底停止与状态
 #
 # 影子验证（不动现网、不碰 gsettings、不写真实应用目录）:
 #   INSTALL_HOME=~/.local/share/openai-proxy-kit-test \
@@ -160,10 +160,16 @@ gen_mihomo_config() {
     local extra=()
     [ -n "$OPENAI_FILTER" ] && extra+=(--openai-filter "$OPENAI_FILTER")
 
+    local mode=rule
+    if [ -f "$MIHOMO_CONF_DIR/config.yaml" ]; then
+        mode=$(MIHOMO_CONF_DIR="$MIHOMO_CONF_DIR" PYTHONPATH="$SCRIPT_DIR/scripts" python3 -c \
+            'import os; from mihomo_mode import saved_mode; print(saved_mode(os.environ) or "rule")') \
+            || die "无法读取旧核心模式，已中止配置生成"
+    fi
     local out_tmp="$MIHOMO_CONF_DIR/config.yaml.new"
     SUB_URL="$SUB_URL" MIHOMO_SECRET="$MIHOMO_SECRET" python3 "$SCRIPT_DIR/scripts/gen_config.py" \
         --out "$out_tmp" \
-        --website-settings "$INSTALL_HOME/website-routing.json" \
+        --website-settings "$INSTALL_HOME/website-routing.json" --mode "$mode" \
         --mixed-port "$MIXED_PORT" --api-port "$API_PORT" --dns-port "$DNS_PORT" \
         --probe-port-base "$PROBE_PORT_BASE" --openai-group "$OPENAI_GROUP" \
         --max-nodes "$MAX_NODES" --mihomo-bin "$MIHOMO_BIN" \
@@ -238,6 +244,8 @@ install_controller() {
     CONTROLLER_BIN="$SCRIPT_DIR/scripts/route_engine.py"
     local was_active=0
     systemctl --user is-active --quiet "$UNIT_CONTROLLER" && was_active=1 || true
+    local mode
+    mode=$(python3 "$SCRIPT_DIR/scripts/mihomo_mode.py" --state "$KIT_ENV" get) || return 1
     if [ ! -f "$CONTROLLER_BIN" ]; then
         warn "未找到本项目路由引擎。建议安装完整软件包。"
         warn "源码开发请检查 scripts/route_engine.py 是否完整。"
@@ -262,7 +270,7 @@ install_controller() {
 
     if [ "$SHADOW" = "1" ]; then
         ok "影子模式: $UNIT_CONTROLLER 已渲染（不启动）"
-    elif systemctl --user is-active --quiet "$UNIT_MIHOMO"; then
+    elif systemctl --user is-active --quiet "$UNIT_MIHOMO" && [ "$mode" != direct ]; then
         systemctl --user enable "$UNIT_CONTROLLER"
         if [ "$was_active" = 1 ]; then
             systemctl --user restart "$UNIT_CONTROLLER"
@@ -274,8 +282,13 @@ install_controller() {
             || die "$UNIT_CONTROLLER 启动失败，查看: journalctl --user -u $UNIT_CONTROLLER -n 30"
         ok "$UNIT_CONTROLLER 已启动"
     else
-        if [ "$was_active" = 1 ]; then systemctl --user stop "$UNIT_CONTROLLER"; fi
-        ok "内置 controller 已配置；核心未开启，保持停止状态"
+        if [ "$mode" = direct ]; then
+            systemctl --user disable --now "$UNIT_CONTROLLER" || return 1
+            ok "内置 controller 已配置；direct 模式下保持停止"
+        else
+            if [ "$was_active" = 1 ]; then systemctl --user stop "$UNIT_CONTROLLER"; fi
+            ok "内置 controller 已配置；核心未开启，保持停止状态"
+        fi
     fi
     return 0
 }
@@ -449,7 +462,7 @@ print_summary() {
   服务         $UNIT_MIHOMO $UNIT_CONTROLLER $UNIT_GUARD_TIMER
   管理面板     http://127.0.0.1:$API_PORT/ui/
   状态文件     $KIT_ENV
-  一键开关     ./install.sh start|stop|status
+  启停命令     ./install.sh start|stop|full-stop|status
 $( [ "$GUI_INSTALLED" = "1" ] && echo "  桌面控制台   应用菜单「代理控制台」（FlClash 风格 GTK4 窗口）" )
 $( [ "$SHADOW" = "1" ] && echo "  ⚠ 影子模式: systemd unit 未启动，系统代理/桌面注入/GUI 未执行" )
   诊断工具     ./diagnose.sh
@@ -472,7 +485,7 @@ main() {
             install_geodata
             gen_mihomo_config
             write_kit_env
-            trap 'code=$?; trap - EXIT; if [ "$code" != 0 ] && [ "$SHADOW" != 1 ]; then bash "$SCRIPT_DIR/scripts/switch.sh" stop || true; fi' EXIT
+            trap 'code=$?; trap - EXIT; if [ "$code" != 0 ] && [ "$SHADOW" != 1 ]; then bash "$SCRIPT_DIR/scripts/switch.sh" full-stop || true; fi' EXIT
             trap 'exit 143' TERM
             trap 'exit 130' INT
             install_systemd_units
@@ -541,8 +554,12 @@ PYMAP
                 INSTALL_HOME="$INSTALL_HOME" OPENAI_GROUP="$OPENAI_GROUP" python3 "$SCRIPT_DIR/scripts/secure_config.py" "$MIHOMO_CONF_DIR/config.yaml"
             fi
             write_kit_env
+            local mode
+            mode=$(python3 "$SCRIPT_DIR/scripts/mihomo_mode.py" --state "$KIT_ENV" get) || die "无法读取核心模式"
             IS_GNOME=0; is_gnome && IS_GNOME=1 || true
-            if [ "$IS_GNOME" = 1 ]; then python3 "$SCRIPT_DIR/scripts/system_proxy.py" adopt --state "$KIT_ENV"; fi
+            if [ "$IS_GNOME" = 1 ] && [ "$mode" != direct ]; then
+                python3 "$SCRIPT_DIR/scripts/system_proxy.py" adopt --state "$KIT_ENV"
+            fi
             install_systemd_units
             install_proxy_guard
             install_controller || die "controller 安装失败"
@@ -565,7 +582,7 @@ PYMAP
             load_kit_env || die "安装状态无效，请重新配置"
             SHADOW=0 install_gui
             ;;
-        start|stop|status)
+        start|stop|full-stop|status)
             exec bash "$SCRIPT_DIR/scripts/switch.sh" "$ACTION"
             ;;
         logs)
@@ -573,7 +590,7 @@ PYMAP
             exec /usr/bin/python3 "$SCRIPT_DIR/scripts/runtime.py" "$@"
             ;;
         *)
-            die "未知子命令: $ACTION（可用: install/update/controller/desktop/gui/start/stop/status）"
+            die "未知子命令: $ACTION（可用: install/update/controller/desktop/gui/start/stop/full-stop/status）"
             ;;
     esac
 }

@@ -36,7 +36,7 @@ def clean_user(keep_gui=False):
     child_env = dict(os.environ, OPK_LOCK_HELD=str(state))
     online = subprocess.run(['systemctl', '--user', 'show-environment'], capture_output=True, timeout=10).returncode == 0
     if online:
-        subprocess.run(['bash', str(SCRIPTS / 'switch.sh'), 'stop'], env=child_env, check=True, timeout=90)
+        subprocess.run(['bash', str(SCRIPTS / 'switch.sh'), 'full-stop'], env=child_env, check=True, timeout=90)
     else:
         restore_proxy(env)
     if not keep_gui:

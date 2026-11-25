@@ -16,6 +16,23 @@ from gi.repository import GLib, Gio
 
 
 class RuntimeTests(unittest.TestCase):
+    @staticmethod
+    def owner_command(args, timeout):
+        if args[0] == 'systemctl':
+            if args != ['systemctl', '--user', 'show', runtime.UNITS['mihomo'],
+                        '-p', 'MainPID', '--value']:
+                raise AssertionError(f'Unexpected MainPID query: {args}')
+            return subprocess.CompletedProcess(args, 0, '4321\n', '')
+        if args[0] == 'ss':
+            if args != ['ss', '-4', '-tlnpH',
+                        f'( sport = :{runtime.API_PORT} or sport = :{runtime.MIXED_PORT} )']:
+                raise AssertionError(f'Unexpected listener query: {args}')
+            output = '\n'.join(
+                f'LISTEN 0 128 127.0.0.1:{port} 0.0.0.0:* users:(("mihomo",pid=4321,fd=8))'
+                for port in (runtime.API_PORT, runtime.MIXED_PORT))
+            return subprocess.CompletedProcess(args, 0, output, '')
+        raise AssertionError(f'Unexpected command: {args}')
+
     def test_command_can_send_private_payload_through_stdin(self):
         result = runtime.command([sys.executable, '-c', 'import sys; print(sys.stdin.read())'],
                                  input_text='SYNTHETIC_STDIN')
@@ -28,11 +45,13 @@ class RuntimeTests(unittest.TestCase):
             path = Path(tmp) / 'kit.env'
 
             def write(port, api, group, secret):
-                path.write_text(f"STATE_VERSION='1'\nINSTALL_HOME='{tmp}'\nMIXED_PORT='{port}'\n"
+                path.write_text(f"STATE_VERSION='1'\nINSTALL_HOME='{tmp}'\nMIHOMO_CONF_DIR='{tmp}'\nMIXED_PORT='{port}'\n"
                                 f"API_PORT='{api}'\nOPENAI_GROUP='{group}'\nMIHOMO_SECRET='{secret}'\n")
 
             def opened(request, timeout):
                 requests.append((request.full_url, request.get_header('Authorization')))
+                if request.full_url.endswith('/configs'):
+                    return io.StringIO(json.dumps({'mode': 'rule'}))
                 node = 'new-node' if ':9090/' in request.full_url else 'old-node'
                 return io.StringIO(json.dumps({'all': [node], 'now': node}))
 
@@ -43,6 +62,9 @@ class RuntimeTests(unittest.TestCase):
                      patch.object(runtime, 'proxy_setting', side_effect=lambda schema, key:
                                   '127.0.0.1' if key == 'host' else runtime.MIXED_PORT), \
                      patch.object(runtime, 'count_injected', return_value=0), \
+                     patch.object(runtime, 'saved_mode', return_value='rule'), \
+                     patch.object(runtime, 'command', side_effect=self.owner_command), \
+                     patch('node_checks.check_context', return_value='fixture-generation'), \
                      patch.object(runtime.HTTP, 'open', side_effect=opened):
                     write('17890', '19090', 'old-group', 'SYNTHETIC_OLD')
                     self.assertEqual(runtime.query_status()['nodes'], ['old-node'])
@@ -68,20 +90,163 @@ class RuntimeTests(unittest.TestCase):
     def test_missing_command_is_actionable(self):
         self.assertEqual(runtime.command(['/does-not-exist/opk']).returncode, 127)
 
-    def status(self, core, mode='none', host='127.0.0.1', port=None, group=True):
+    def status(self, core, mode='none', host='127.0.0.1', port=None, group=True,
+               disk_mode=None, api_mode=None, controller=None, guard=None, injected=0,
+               owner_command=None):
+        if core and disk_mode is None and api_mode is None:
+            disk_mode = api_mode = 'rule'
+        rule = disk_mode == api_mode == 'rule'
+        controller = core and rule if controller is None else controller
+        guard = core and rule if guard is None else guard
+        active = {'mihomo': core, 'controller': controller, 'guard': guard}
+
         def setting(schema, key):
             return host if key == 'host' else port or runtime.MIXED_PORT
+
+        def get(path):
+            if path == '/configs':
+                return {'mode': api_mode} if api_mode else None
+            return {'all': ['A'], 'now': 'A'} if group else None
+
         with patch.object(runtime, 'refresh_config'), \
-             patch.dict(runtime.ENV, {'STATE_VERSION': '1'}, clear=True), \
-             patch.object(runtime, 'unit_active', side_effect=lambda u: core and u == runtime.UNITS['mihomo']), \
+             patch.dict(runtime.ENV, {'STATE_VERSION': '1', 'MIHOMO_CONF_DIR': '/offline-fixture'}, clear=True), \
+             patch.object(runtime, 'unit_active', side_effect=lambda u: active.get(
+                 next((key for key, unit in runtime.UNITS.items() if unit == u), ''), False)), \
              patch.object(runtime, 'sys_proxy_mode', return_value=mode), \
              patch.object(runtime, 'proxy_setting', side_effect=setting), \
-             patch.object(runtime, 'count_injected', return_value=0), \
-             patch.object(runtime, 'mihomo_get', return_value={'all': ['A'], 'now': 'A'} if group else None):
+             patch.object(runtime, 'count_injected', return_value=injected), \
+             patch.object(runtime, 'saved_mode', return_value=disk_mode), \
+             patch.object(runtime, 'mihomo_get', side_effect=get), \
+             patch.object(runtime, 'command', side_effect=owner_command or self.owner_command), \
+             patch('node_checks.check_context', return_value='fixture-generation'):
             return runtime.query_status()
 
     def test_stopped_state(self):
         self.assertEqual(self.status(False)['phase'], 'off')
+
+    def test_full_stop_is_off_even_when_disk_mode_is_rule(self):
+        def unexpected(*args, **kwargs):
+            self.fail('Fully stopped status must not inspect host listeners')
+
+        status = self.status(False, disk_mode='rule', owner_command=unexpected)
+        self.assertEqual(status['phase'], 'off')
+        self.assertFalse(status['running'])
+        self.assertEqual(status['issues'], [])
+
+    def test_missing_or_foreign_listener_is_partial(self):
+        for port in (runtime.API_PORT, runtime.MIXED_PORT):
+            for failure in ('missing', 'foreign', 'hidden', 'remote-only'):
+                for mode in ('rule', 'direct'):
+                    with self.subTest(port=port, failure=failure, mode=mode):
+                        def command(args, timeout):
+                            result = self.owner_command(args, timeout)
+                            if args[0] == 'ss':
+                                rows = result.stdout.splitlines()
+                                for index, row in enumerate(rows):
+                                    if f'127.0.0.1:{port} ' in row:
+                                        rows[index] = {
+                                            'missing': '',
+                                            'foreign': row.replace('pid=4321,', 'pid=54321,'),
+                                            'hidden': row.split(' users:')[0],
+                                            'remote-only': row.replace('127.0.0.1:', '192.0.2.1:'),
+                                        }[failure]
+                                result.stdout = '\n'.join(rows)
+                            return result
+
+                        status = self.status(True, 'manual' if mode == 'rule' else 'none',
+                                             disk_mode=mode, api_mode=mode, owner_command=command)
+                        self.assertEqual(status['phase'], 'partial')
+                        self.assertFalse(status['running'])
+                        self.assertTrue(any(port in issue for issue in status['issues']))
+
+    def test_owner_probe_failures_are_partial_and_bounded(self):
+        for binary, code, output in (('systemctl', 0, '0'), ('systemctl', 0, 'invalid'),
+                                     ('systemctl', 1, ''), ('systemctl', 124, ''),
+                                     ('ss', 127, ''), ('ss', 124, '')):
+            with self.subTest(binary=binary, code=code, output=output):
+                calls = []
+
+                def command(args, timeout):
+                    calls.append(args)
+                    self.assertLessEqual(timeout, 1)
+                    if args[0] == binary:
+                        return subprocess.CompletedProcess(args, code, output, '')
+                    return self.owner_command(args, timeout)
+
+                status = self.status(True, 'manual', owner_command=command)
+                self.assertEqual(status['phase'], 'partial')
+                self.assertFalse(status['running'])
+                self.assertTrue(status['issues'])
+                self.assertLessEqual(len(calls), 2)
+
+    def test_ipv4_wildcard_listeners_owned_by_core_are_ready(self):
+        for address in ('0.0.0.0', '*'):
+            with self.subTest(address=address):
+                calls = []
+
+                def command(args, timeout):
+                    calls.append(args)
+                    result = self.owner_command(args, timeout)
+                    if args[0] == 'ss':
+                        result.stdout = result.stdout.replace('127.0.0.1:', address + ':')
+                    return result
+
+                self.assertTrue(self.status(True, 'manual', owner_command=command)['running'])
+                self.assertEqual(len(calls), 2)
+
+    def test_conflicting_listener_is_not_hidden_by_owned_listener(self):
+        def command(args, timeout):
+            result = self.owner_command(args, timeout)
+            if args[0] == 'ss':
+                result.stdout += '\n' + result.stdout.splitlines()[-1].replace('pid=4321,', 'pid=99,')
+            return result
+
+        status = self.status(True, 'manual', owner_command=command)
+        self.assertEqual(status['phase'], 'partial')
+        self.assertTrue(any(runtime.MIXED_PORT in issue for issue in status['issues']))
+
+    def test_direct_idle_core_is_normal_off(self):
+        status = self.status(True, disk_mode='direct', api_mode='direct')
+        self.assertEqual(status['phase'], 'off')
+        self.assertFalse(status['running'])
+        self.assertTrue(status['services']['mihomo'])
+        self.assertEqual(status['issues'], [])
+
+    def test_direct_mode_mismatch_is_partial(self):
+        status = self.status(True, disk_mode='direct', api_mode='rule')
+        self.assertEqual(status['phase'], 'partial')
+        self.assertTrue(any('模式不一致' in issue for issue in status['issues']))
+
+    def test_direct_residuals_are_partial(self):
+        cases = (
+            {'controller': True},
+            {'guard': True},
+            {'mode': 'manual'},
+            {'injected': 1},
+        )
+        for changes in cases:
+            with self.subTest(changes=changes):
+                status = self.status(True, disk_mode='direct', api_mode='direct', **changes)
+                self.assertEqual(status['phase'], 'partial')
+
+    def test_incomplete_rule_chain_is_not_running(self):
+        for changes in ({'controller': False}, {'guard': False}):
+            with self.subTest(changes=changes):
+                status = self.status(True, 'manual', **changes)
+                self.assertEqual(status['phase'], 'partial')
+                self.assertFalse(status['running'])
+
+    def test_repeated_status_refresh_never_probes_public_endpoints(self):
+        with patch('websites.probe_services') as probe:
+            self.status(True, disk_mode='direct', api_mode='direct')
+            self.status(True, disk_mode='direct', api_mode='direct')
+        probe.assert_not_called()
+
+    def test_openai_check_returns_only_openai_result(self):
+        openai = {'ok': True, 'detail': '公开端点可达'}
+        with patch.object(runtime, 'check_websites', return_value={
+                'openai': openai, 'github': {'ok': False, 'detail': '失败'}}):
+            self.assertIs(runtime.check_openai(), openai)
 
     def test_running_requires_correct_proxy_and_api(self):
         self.assertTrue(self.status(True, 'manual')['running'])

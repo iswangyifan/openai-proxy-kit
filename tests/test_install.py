@@ -27,7 +27,7 @@ class ControllerInstallTests(unittest.TestCase):
             self.assertNotIn('EnvironmentFile= path is not absolute', result.stderr)
             self.assertEqual(result.returncode, 0, result.stderr)
 
-    def install(self, active):
+    def install(self, active, mode='rule'):
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)
             data = home / 'data'
@@ -50,8 +50,10 @@ if 'is-active' in sys.argv:
             sleep.write_text('#!/bin/sh\nexit 0\n')
             sleep.chmod(0o755)
             gsettings = binary / 'gsettings'
-            gsettings.write_text("#!/bin/sh\ncase \"$3\" in host) echo \"''\";; port) echo 0;; *) echo \"'none'\";; esac\n")
+            gsettings.write_text("#!/bin/sh\nprintf 'gsettings %s\\n' \"$*\" >> \"$OPK_TEST_CALLS\"\ncase \"$3\" in host) echo \"''\";; port) echo 0;; *) echo \"'none'\";; esac\n")
             gsettings.chmod(0o755)
+            (home / 'conf').mkdir()
+            (home / 'conf/config.yaml').write_text(f'mode: {mode}\nrules: []\n')
             envfile = data / 'kit.env'
             values = {'INSTALL_HOME': str(data), 'MIXED_PORT': '17890', 'API_PORT': '19090',
                       'DNS_PORT': '1153', 'MIHOMO_SECRET': 'a' * 64, 'PROBE_PORT_BASE': '17900', 'OPENAI_GROUP': 'Test',
@@ -86,6 +88,15 @@ if 'is-active' in sys.argv:
         calls = self.install(True)
         self.assertIn('restart legacy-controller.service', calls)
         self.assertIn('restart legacy-core.service', calls)
+
+    def test_direct_upgrade_never_starts_controller_or_adopts_system_proxy(self):
+        calls = self.install(True, mode='direct')
+        self.assertIn('disable --now legacy-controller.service', calls)
+        self.assertIn('restart legacy-core.service', calls)
+        self.assertNotIn('start legacy-controller.service', calls)
+        self.assertNotIn('restart legacy-controller.service', calls)
+        self.assertNotIn('enable legacy-controller.service', calls)
+        self.assertNotIn('gsettings', calls)
 
 
 if __name__ == '__main__':

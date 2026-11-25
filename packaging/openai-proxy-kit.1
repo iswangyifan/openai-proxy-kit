@@ -3,7 +3,7 @@
 openai-proxy-kit \- Linux tray proxy switch for OpenAI services
 .SH SYNOPSIS
 .B openai-proxy-kit
-.RI [ gui | start | stop | status | configure | upgrade | update | diagnose | reset | logs ]
+.RI [ gui | start | stop | full-stop | status | configure | upgrade | update | diagnose | reset | logs ]
 .SH DESCRIPTION
 A GTK4 console and tray switch. The package includes mihomo and a self-contained
 route controller. User configuration must run without sudo. Installation and
@@ -17,7 +17,11 @@ Open the console without enabling the proxy.
 Start user services, enable login startup, and apply the proxy.
 .TP
 .B stop
-Restore owned proxy settings and launchers, then stop user services and disable startup.
+Switch mihomo to persistent direct mode and keep it active and enabled. Stop the route
+controller and guard, and restore owned system proxy settings and launchers.
+.TP
+.B full-stop
+Restore user integration, then stop and disable all components for maintenance or cleanup.
 .TP
 .B configure
 Configure a trusted Clash YAML subscription interactively.
@@ -26,7 +30,7 @@ Configure a trusted Clash YAML subscription interactively.
 Migrate existing configuration and use bundled runtime components.
 .TP
 .B update
-Refresh the subscription; keep stopped services stopped.
+Refresh the subscription while preserving the saved rule/direct mode.
 .TP
 .B reset
 Restore user integration while retaining private configuration and backups.

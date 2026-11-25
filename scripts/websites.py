@@ -141,17 +141,24 @@ def assert_owner(env):
             raise RuntimeError('管理或代理端口属于其他进程，未重载配置')
 
 
-def api(env, path, value=None):
+def api(env, path, value=None, method=None):
     request = urllib.request.Request('http://127.0.0.1:' + env['API_PORT'] + path,
         headers={'Authorization': 'Bearer ' + env.get('MIHOMO_SECRET', ''), 'Content-Type': 'application/json'},
         data=json.dumps(value).encode() if value is not None else None,
-        method='PUT' if value is not None else 'GET')
+        method=method or ('PUT' if value is not None else 'GET'))
     client = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     with client.open(request, timeout=8) as response:
         body = response.read(2 * 1024 * 1024 + 1)
         if len(body) > 2 * 1024 * 1024:
             raise ValueError('核心响应过大')
         return json.loads(body) if body else {}
+
+
+def validate_config(env, config_path, candidate):
+    result = subprocess.run([env['MIHOMO_BIN'], '-t', '-d', str(Path(config_path).parent), '-f', str(candidate)],
+                            capture_output=True, timeout=45)
+    if result.returncode:
+        raise ValueError('核心配置校验失败，未更改已保存设置')
 
 
 def reload_core(env, config_path):
@@ -212,10 +219,7 @@ def apply_profile(env, profile):
     os.close(fd)
     try:
         private_write(temporary, rendered)
-        result = subprocess.run([env['MIHOMO_BIN'], '-t', '-d', str(config.parent), '-f', str(temporary)],
-                                capture_output=True, timeout=45)
-        if result.returncode:
-            raise ValueError('核心配置校验失败，未更改已保存设置')
+        validate_config(env, config, temporary)
     finally:
         temporary.unlink(missing_ok=True)
     live = active(env)

@@ -49,7 +49,7 @@ def button(text, callback, icon=None, css='secondary'):
 
 
 def card(title, icon, *children, hero=False):
-    heading = box(Gtk.Image(icon_name=icon), label(title, 'section-title'), vertical=False, spacing=9)
+    heading = box(Gtk.Image(icon_name=icon), label(title, 'section-title', True), vertical=False, spacing=9)
     return box(heading, *children, spacing=16, css_classes=['surface'] + (['hero'] if hero else []))
 
 
@@ -61,6 +61,7 @@ class MainWindow(Adw.ApplicationWindow):
         self.add_css_class('opk')
         self.delay_cache, self.node_rows = {}, {}
         self.node_names = ()
+        self.openai_cache = None
         self.log_revision, self.log_filters = -1, None
         self.connect('close-request', self._close_requested)
         self.connect('notify::visible', self._visibility_changed)
@@ -77,6 +78,7 @@ class MainWindow(Adw.ApplicationWindow):
         self.set_content(self.overlay)
         self.stack = Gtk.Stack(hexpand=True, vexpand=True,
                                transition_type=Gtk.StackTransitionType.CROSSFADE, transition_duration=120)
+        self.stack.set_hhomogeneous(False)
         self.stack.connect('notify::visible-child-name', self._page_changed)
         self.sidebar = self._sidebar()
         header = Adw.HeaderBar()
@@ -139,15 +141,32 @@ class MainWindow(Adw.ApplicationWindow):
         self.power_btn = button('开启代理', self.on_power_clicked, 'system-shutdown-symbolic', 'power')
         self.power_btn.set_halign(Gtk.Align.START)
         self.spinner = Gtk.Spinner()
-        hero = card('连接控制', 'network-workgroup-symbolic', self.state_pill, self.state_title,
-                    self.state_detail, box(self.power_btn, self.spinner, vertical=False), hero=True)
+        status_heading = box(self.state_title, self.state_pill, vertical=False, spacing=12)
+        status_heading.set_valign(Gtk.Align.CENTER)
+        status_copy = box(status_heading, self.state_detail, spacing=8)
+        status_copy.set_hexpand(True)
+        controls = box(self.power_btn, self.spinner, vertical=False, spacing=8)
+        controls.set_valign(Gtk.Align.CENTER)
+        hero = box(status_copy, controls, vertical=False, spacing=20,
+                   css_classes=['surface', 'hero'])
+        self.overview_hero = hero
         hero.set_hexpand(True)
-        self.proxy_value, self.proxy_detail = label('—', 'value', True), label('读取系统代理地址', 'detail', True)
-        self.service_value, self.service_detail = label('—', 'value'), label('读取服务状态', 'detail', True)
-        right = box(card('系统代理', 'network-transmit-receive-symbolic', self.proxy_value, self.proxy_detail),
-                    card('后台服务', 'system-run-symbolic', self.service_value, self.service_detail))
-        right.set_size_request(245, -1)
-        page.append(box(hero, right, vertical=False, spacing=16))
+        hero.set_valign(Gtk.Align.START)
+        page.append(hero)
+        self.proxy_value, self.proxy_detail = label('—', 'value', True), label('读取代理模式', 'detail', True)
+        self.service_value, self.service_detail = label('—', 'value'), label('读取本地核心状态', 'detail', True)
+        self.openai_value = label('未检测', 'value')
+        self.openai_detail = label('公开端点仅在手动检测时访问', 'detail', True)
+        self.openai_btn = button('检测公开端点', self.check_openai, 'network-transmit-symbolic')
+        status_grid = Gtk.Grid(column_spacing=12, row_spacing=12, column_homogeneous=True)
+        for column, item in enumerate((
+                card('本地核心状态', 'system-run-symbolic', self.service_value, self.service_detail),
+                card('规则代理/直连', 'network-transmit-receive-symbolic', self.proxy_value, self.proxy_detail),
+                card('ChatGPT 公开端点检测', 'web-browser-symbolic', self.openai_value, self.openai_detail,
+                     self.openai_btn))):
+            item.add_css_class('status-card')
+            status_grid.attach(item, column, 0, 1, 1)
+        page.append(status_grid)
         self.current_node, self.node_detail = label('尚未选择', 'value', True), label('启动代理后可查看候选节点', 'detail', True)
         node_card = card('当前节点', 'network-server-symbolic', self.current_node, self.node_detail,
                          button('管理节点', lambda *_: self.show_page('nodes'), 'go-next-symbolic'))
@@ -204,7 +223,7 @@ class MainWindow(Adw.ApplicationWindow):
 
     def _websites_page(self):
         page = self._page('websites', '代理网站', '选择哪些网站使用代理，其余流量保持直连。')
-        self.site_dirty, self.site_loading, self.website_checked_node = False, False, None
+        self.site_dirty, self.site_loading = False, False
         self.website_switches, self.website_results = {}, {}
         rows = []
         for key, title, detail in (
@@ -270,10 +289,58 @@ class MainWindow(Adw.ApplicationWindow):
             return
         self.site_dirty = True
         self.website_check.set_sensitive(False)
-        self.website_checked_node = None
         self.sites_message.set_text('修改尚未保存。保存后再检测网站。')
         for result in self.website_results.values():
             result.set_text('未检测')
+
+    def _openai_context(self, status=None):
+        status = self.app.status if status is None else status
+        return (status.get('group_now'), status.get('disk_mode'), status.get('api_mode'),
+                status.get('node_check_generation'))
+
+    def _render_openai(self, status):
+        context = self._openai_context(status)
+        if self.openai_cache and self.openai_cache['context'] != context:
+            self.openai_cache = None
+            for value in self.website_results.values():
+                value.set_text('未检测')
+        result = self.openai_cache if self.openai_cache and self.openai_cache['context'] == context else None
+        if result is None:
+            self.openai_value.set_text('未检测')
+            self.openai_value.set_css_classes(['value'])
+            self.openai_detail.set_text('直连模式下不检测当前代理链路' if status.get('api_mode') == 'direct'
+                                       else '开启规则代理后可手动检测' if not status.get('running') else
+                                       '仅手动检测，不代表账号登录或对话成功')
+        else:
+            self.openai_value.set_text('成功' if result['ok'] else '失败')
+            self.openai_value.set_css_classes(['value', 'success' if result['ok'] else 'warning'])
+            self.openai_detail.set_text(result['detail'])
+        self.openai_btn.set_sensitive(not self.app.busy and status.get('running', False))
+        self.openai_btn.set_tooltip_text('直连模式下已禁用当前代理链路检测；请先开启规则代理'
+                                        if status.get('api_mode') == 'direct' else
+                                        '通过当前规则代理链路手动检测 ChatGPT 公开端点')
+
+    def _store_openai_result(self, result, context):
+        ok = result.get('ok') is True
+        detail = result.get('detail') or ('公开端点可达' if ok else '公开端点检测失败')
+        self.openai_cache = {'context': context, 'ok': ok, 'detail': detail}
+        self._render_openai(self.app.status)
+        if context == self._openai_context():
+            self.website_results['openai'].set_text(detail)
+
+    def check_openai(self, *_):
+        context = self._openai_context()
+
+        def work():
+            try:
+                return runtime.check_openai()
+            except Exception as exc:
+                return {'ok': False, 'detail': runtime.redact(str(exc))}
+
+        def finished(result):
+            self._store_openai_result(result, context)
+            self.toast('ChatGPT 公开端点检测成功' if result.get('ok') is True else 'ChatGPT 公开端点检测失败')
+        self.app.task(work, finished, '正在检测 ChatGPT 公开端点…')
 
     def save_sites(self, *_):
         from websites import normalize
@@ -296,12 +363,15 @@ class MainWindow(Adw.ApplicationWindow):
             details = json.loads(result.stdout)
             self.sites_message.set_text('已保存并应用到当前代理。' if details['live'] else
                                        '已保存，开启代理后生效。' if details['configured'] else '已保存，完成订阅配置后生效。')
-            self.website_checked_node = None
+            self.openai_cache = None
+            self._render_openai(self.app.status)
             for value in self.website_results.values():
                 value.set_text('未检测')
         self.app.task(lambda: runtime.save_websites(profile), finished, '正在保存代理网站…')
 
     def check_sites(self, *_):
+        context = self._openai_context()
+
         def work():
             try:
                 return runtime.check_websites()
@@ -310,13 +380,15 @@ class MainWindow(Adw.ApplicationWindow):
 
         def finished(results):
             if 'error' in results:
+                self._store_openai_result({'ok': False, 'detail': results['error']}, context)
                 for value in self.website_results.values():
                     value.set_text('检测未完成')
                 self.sites_message.set_text(results['error'])
                 return
+            if 'openai' in results:
+                self._store_openai_result(results['openai'], context)
             for key, value in results.items():
                 self.website_results[key].set_text(value['detail'])
-            self.website_checked_node = self.app.status.get('group_now')
             self.sites_message.set_text('检测完成。公开端点可达不代表账号登录、完整下载或视频播放一定成功。')
         for key, value in self.website_results.items():
             value.set_text('检测中…' if key == 'openai' or self.website_switches[key].get_active() else '预设未启用')
@@ -420,22 +492,29 @@ class MainWindow(Adw.ApplicationWindow):
     def apply_status(self, status):
         phase = 'busy' if self.app.busy else status.get('phase', 'partial')
         self.state_title.set_text(self.app.busy_text if self.app.busy else STATE_LABELS[phase])
-        self.state_pill.set_text('处理中' if self.app.busy else '已连接' if phase == 'on' else '需检查' if phase == 'partial'
-                                else '直连模式' if status.get('sys_proxy') == 'none' else '未接管')
+        services = status.get('services', {})
+        is_direct = status.get('disk_mode') == status.get('api_mode') == 'direct'
+        self.state_pill.set_text('处理中' if self.app.busy else '规则代理' if phase == 'on' else '需检查'
+                                if phase == 'partial' else '直连模式' if is_direct else '已停止')
         self.state_pill.set_css_classes(['pill'] + (['success'] if phase == 'on' else ['warning'] if phase == 'partial' else []))
         self.state_detail.set_text('正在执行操作，请稍候。' if self.app.busy else
-            '代理核心与系统代理已就绪，应用可能仍需重启。' if phase == 'on' else
-            '；'.join(status.get('issues', [])) or '服务与系统代理状态不一致，请查看日志或运行诊断。' if phase == 'partial' else
-            '系统代理未由本工具接管。需要使用 AI 服务时可开启代理。')
+            '完整规则代理链路已就绪；ChatGPT 公开端点需手动检测。' if phase == 'on' else
+            '；'.join(status.get('issues', [])) or '服务、模式或系统代理状态不一致，请查看日志或运行诊断。' if phase == 'partial' else
+            '核心保持 direct 常驻，规则代理、系统代理和启动器注入已关闭。' if is_direct and services.get('mihomo') else
+            '核心与规则代理组件已停止。需要使用规则代理时可重新开启。')
         self.power_btn.set_child(box(Gtk.Image(icon_name='system-shutdown-symbolic'),
             Gtk.Label(label='关闭代理' if status.get('phase') in ('on', 'partial') else '开启代理'), vertical=False, spacing=8))
         self.power_btn.set_sensitive(not self.app.busy and status.get('installed', False))
         self.spinner.set_spinning(self.app.busy)
         mode = status.get('sys_proxy', 'unknown')
-        self.proxy_value.set_text('已开启' if status.get('proxy_owned') else '已关闭' if mode == 'none' else '其他配置')
-        self.proxy_detail.set_text(f'127.0.0.1:{runtime.MIXED_PORT}' if status.get('proxy_owned') else
-                                   '系统直连' if mode == 'none' else status.get('proxy_target') or mode)
-        services = status.get('services', {})
+        self.proxy_value.set_text('规则代理' if phase == 'on' else '需要检查' if phase == 'partial' else
+                                  '直连' if is_direct else '已停止')
+        self.proxy_detail.set_text(
+            f'磁盘/API：rule · 系统代理 127.0.0.1:{runtime.MIXED_PORT}' if phase == 'on' else
+            f"磁盘：{status.get('disk_mode') or '未知'} · 运行：{status.get('api_mode') or '未知'}" if phase == 'partial' else
+            '磁盘/API：direct · 系统直连，本地核心保留' if is_direct and mode == 'none' else
+            '磁盘/API：direct · 保留其他系统代理配置' if is_direct else
+            '核心及规则代理组件已停止')
         self.service_value.set_text('核心运行中' if services.get('mihomo') else '核心已停止')
         self.service_detail.set_text('自动切换：' + ('运行中' if services.get('controller') else '未运行') +
                                     '  ·  守护：' + ('运行中' if services.get('guard') else '未运行'))
@@ -464,10 +543,7 @@ class MainWindow(Adw.ApplicationWindow):
         self.website_domains.set_editable(not self.app.busy)
         for control in self.website_switches.values():
             control.set_sensitive(not self.app.busy)
-        if self.website_checked_node and self.website_checked_node != status.get('group_now'):
-            for value in self.website_results.values():
-                value.set_text('节点已变更，请重新检测')
-            self.website_checked_node = None
+        self._render_openai(status)
         ui = Path(ENV.get('MIHOMO_CONF_DIR', Path.home() / '.config/mihomo')) / 'ui'
         self.panel_btn.set_sensitive(not self.app.busy and bool(status.get('running')) and (ui / 'index.html').is_file())
         self._update_nodes(status)
@@ -754,17 +830,23 @@ class KitApp(Adw.Application):
         def finished(result):
             self.record_result(result, '开启代理' if on else '关闭代理')
             if quitting and result.returncode == 0:
-                self.task(query_status, verify_stopped, '正在确认关闭结果…')
-
-        def verify_stopped(status):
-            self.status = status
-            if any(status.get('services', {}).values()) or status.get('proxy_owned'):
-                self.window.present()
-                self.window.toast('仍有服务或代理配置未关闭，请查看日志')
-                self.logs.add('操作', '关闭后仍有残留服务或代理设置，已取消退出', 'ERROR')
-            else:
-                self.quit()
+                self.task(query_status, self._verify_stopped, '正在确认关闭结果…')
         self.task(lambda: run_switch(on), finished, '正在开启代理…' if on else '正在关闭代理…')
+
+    def _verify_stopped(self, status):
+        self.status = status
+        services = status.get('services', {})
+        residual = (services.get('controller') or services.get('guard') or
+                    status.get('proxy_owned') or status.get('injected'))
+        direct_idle = (services.get('mihomo') and status.get('phase') == 'off' and
+                       status.get('disk_mode') == status.get('api_mode') == 'direct')
+        fully_stopped = not services.get('mihomo') and status.get('phase') == 'off'
+        if residual or not (direct_idle or fully_stopped):
+            self.window.present()
+            self.window.toast('仍有组件、模式或代理配置未关闭，请查看日志')
+            self.logs.add('操作', '关闭后仍有组件、模式或代理设置残留，已取消退出', 'ERROR')
+        else:
+            self.quit()
 
     def stop_and_quit(self):
         if self.busy:

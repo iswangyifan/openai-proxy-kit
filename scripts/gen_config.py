@@ -117,6 +117,8 @@ def build_config(proxies: list[dict], openai_names: list[str], args) -> dict:
 
     # 静态节点与独立监听入口采用同一份快照，订阅更新后重新生成映射。
     config["secret"] = os.environ.get("MIHOMO_SECRET") or secrets.token_hex(32)
+    config["mode"] = getattr(args, "mode", None) or "rule"
+    config["dns"]["enable"] = config["mode"] == "rule"
     config["proxies"] = proxies
 
     # --- proxy-groups ---
@@ -176,6 +178,7 @@ def main():
     ap.add_argument("--templates-dir", default=None,
                     help="模板目录（默认取脚本同级 ../templates）")
     ap.add_argument('--website-settings', help='用户私有代理网站设置文件')
+    ap.add_argument('--mode', choices=('rule', 'direct'), default='rule', help='持久运行的核心模式')
     ap.add_argument("--mixed-port", type=int, default=7890)
     ap.add_argument("--api-port", type=int, default=9090)
     ap.add_argument("--dns-port", type=int, default=1053)

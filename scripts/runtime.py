@@ -16,6 +16,7 @@ from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from kit_state import load as load_state
+from mihomo_mode import saved_mode
 
 
 def load_env():
@@ -60,7 +61,7 @@ def refresh_config():
     GUARD_SERVICE = ENV.get('UNIT_GUARD_SERVICE', 'proxy-guard-kit.service')
 
 
-def command(args, timeout=8, input_text=None, **kwargs):
+def command(args, timeout=8, input_text=None, termination_grace=5, **kwargs):
     try:
         if input_text is not None:
             kwargs['stdin'] = subprocess.PIPE
@@ -74,7 +75,7 @@ def command(args, timeout=8, input_text=None, **kwargs):
                 except ProcessLookupError:
                     pass
                 try:
-                    process.communicate(timeout=5)
+                    process.communicate(timeout=termination_grace)
                 except subprocess.TimeoutExpired:
                     try:
                         os.killpg(process.pid, signal.SIGKILL)
@@ -122,10 +123,37 @@ def mihomo_get(path, timeout=2):
         return None
 
 
+def listener_issues():
+    """状态刷新仅做本机短时核验，共用一次 IPv4 监听快照。"""
+    result = command(['systemctl', '--user', 'show', UNITS['mihomo'],
+                      '-p', 'MainPID', '--value'], timeout=1)
+    pid = result.stdout.strip()
+    if result.returncode or not pid.isdecimal() or int(pid) <= 0:
+        return ['无法确认代理核心 MainPID，端口归属核验失败']
+    result = command(['ss', '-4', '-tlnpH',
+                      f'( sport = :{API_PORT} or sport = :{MIXED_PORT} )'], timeout=1)
+    if result.returncode:
+        return ['无法读取本机监听端口，管理 API 与代理入口归属核验失败']
+    issues = []
+    for title, port in (('管理 API', API_PORT), ('代理入口', MIXED_PORT)):
+        rows = []
+        for row in result.stdout.splitlines():
+            fields = row.split()
+            if len(fields) >= 5 and fields[3] in (
+                    f'127.0.0.1:{port}', f'0.0.0.0:{port}', f'*:{port}'):
+                rows.append(row)
+        if not rows:
+            issues.append(f'{title}端口 {port} 未在本机 IPv4 回环地址监听')
+        elif any(set(re.findall(r'\bpid=(\d+),', row)) != {pid} for row in rows):
+            issues.append(f'{title}端口 {port} 不属于代理核心 MainPID 或无法确认归属')
+    return issues
+
+
 def query_status():
     # 配置可能由终端升级或另一个进程更新，长驻 GUI 不能一直沿用导入时的快照。
     refresh_config()
     services = {key: unit_active(unit) for key, unit in UNITS.items()}
+    port_issues = listener_issues() if services['mihomo'] else []
     mode = sys_proxy_mode()
     targets = [(proxy_setting(f"org.gnome.system.proxy.{kind}", "host"),
                 proxy_setting(f"org.gnome.system.proxy.{kind}", "port"))
@@ -135,35 +163,76 @@ def query_status():
                            (INSTALL_HOME / 'proxy-enabled').exists())
     owned = lease and mode == "manual" and any(host == "127.0.0.1" and port == MIXED_PORT
                                       for host, port in targets)
+    injected = count_injected()
+    invalid_disk_mode = False
+    try:
+        disk_mode = saved_mode(dict(ENV)) if ENV.get('MIHOMO_CONF_DIR') else None
+    except (OSError, ValueError):
+        disk_mode = None
+        invalid_disk_mode = True
+    configs = mihomo_get("/configs")
+    config_api_available = isinstance(configs, dict)
+    api_mode = configs.get("mode") if config_api_available else None
     group = mihomo_get("/proxies/" + urllib.parse.quote(OPENAI_GROUP, safe=""))
     api_available = isinstance(group, dict)
     group = group if api_available else {}
-    running = services["mihomo"] and mode == "manual" and all(
-        h == "127.0.0.1" and p == MIXED_PORT for h, p in targets[:2]) and bool(group.get("all"))
-    phase = "on" if running else "partial" if any(services.values()) or owned else "off"
-    issues = []
+
+    proxy_ready = mode == "manual" and all(
+        h == "127.0.0.1" and p == MIXED_PORT for h, p in targets[:2])
+    running = (all(services.values()) and disk_mode == api_mode == "rule" and
+               proxy_ready and bool(group.get("all")) and not port_issues)
+    direct_idle = (services["mihomo"] and not services["controller"] and not services["guard"] and
+                   disk_mode == api_mode == "direct" and not owned and not injected and not port_issues)
+    fully_stopped = not any(services.values()) and not owned and not injected and not invalid_disk_mode
+    phase = "on" if running else "off" if direct_idle or fully_stopped else "partial"
+
+    issues = list(port_issues)
     if phase == 'partial':
+        if invalid_disk_mode:
+            issues.append('磁盘配置模式无效，请检查 config.yaml')
+        if services['mihomo'] and disk_mode in ('rule', 'direct') and api_mode in ('rule', 'direct') \
+                and disk_mode != api_mode:
+            issues.append(f'磁盘配置与核心运行模式不一致（{disk_mode} / {api_mode}）')
+        if services['mihomo'] and not config_api_available:
+            issues.append('核心模式读取失败，请核对管理 API 端口及密钥')
+        elif services['mihomo'] and api_mode not in ('rule', 'direct'):
+            issues.append('核心运行模式无效或缺失')
+        if services['mihomo'] and disk_mode not in ('rule', 'direct') and not invalid_disk_mode:
+            issues.append('磁盘配置缺少 rule/direct 模式')
         if not services['mihomo']:
             issues.append('代理核心未运行')
         if services['mihomo'] and not api_available:
             issues.append('节点读取失败，请核对管理 API 端口、密钥及代理组配置')
-        elif services['mihomo'] and not group.get('all'):
+        elif services['mihomo'] and not group.get('all') and 'rule' in (disk_mode, api_mode):
             issues.append('当前代理组没有候选节点，请检查订阅')
-        if services['mihomo'] and (mode != 'manual' or not all(
-                h == '127.0.0.1' and p == MIXED_PORT for h, p in targets[:2])):
+        rule_expected = disk_mode == api_mode == 'rule'
+        for key, title in (('controller', '路由控制器'), ('guard', '代理守护')):
+            if rule_expected and not services[key]:
+                issues.append(title + '未运行')
+            elif services[key] and not running:
+                issues.append(title + '仍在运行')
+        if owned and not rule_expected:
+            issues.append('系统代理仍指向当前核心端口 ' + MIXED_PORT)
+        elif services['mihomo'] and rule_expected and not proxy_ready:
             issues.append('系统代理未指向当前核心端口 ' + MIXED_PORT)
+        if injected and not running:
+            issues.append(f'桌面启动器仍有 {injected} 个注入残留')
     from node_checks import check_context
-    generation = check_context(dict(ENV)) if services['mihomo'] and api_available else None
+    generation = (check_context(dict(ENV)) if services['mihomo'] and
+                  (config_api_available or api_available) else None)
     return {"services": services, "sys_proxy": mode, "proxy_owned": owned,
             "proxy_target": " / ".join(f"{h}:{p}" for h, p in targets),
-            "injected": count_injected(), "running": running, "phase": phase,
+            "injected": injected, "running": running, "phase": phase,
+            "disk_mode": disk_mode, "api_mode": api_mode,
+            "config_api_available": config_api_available,
             "group_now": group.get("now"), "nodes": group.get("all", []),
             "api_available": api_available, "issues": issues, "node_check_generation": generation,
             "installed": bool(ENV), "checked_at": time.strftime("%H:%M:%S")}
 
 
 def run_switch(on):
-    return command(["bash", SWITCH_BIN, "start" if on else "stop"], timeout=75)
+    # 模式事务收到 TERM 后需要恢复磁盘、重载并回读，不能在 5 秒内强杀。
+    return command(["bash", SWITCH_BIN, "start" if on else "stop"], timeout=75, termination_grace=60)
 
 
 def website_profile():
@@ -181,6 +250,10 @@ def check_websites():
     from websites import probe_services, current_profile
     env = dict(ENV)
     return probe_services(env, current_profile(env))
+
+
+def check_openai():
+    return check_websites()['openai']
 
 
 def put_node(node):
