@@ -158,14 +158,17 @@ class MainWindow(Adw.ApplicationWindow):
         self.openai_value = label('未检测', 'value')
         self.openai_detail = label('公开端点仅在手动检测时访问', 'detail', True)
         self.openai_btn = button('检测公开端点', self.check_openai, 'network-transmit-symbolic')
-        status_grid = Gtk.Grid(column_spacing=12, row_spacing=12, column_homogeneous=True)
-        for column, item in enumerate((
+        status_grid = Gtk.FlowBox(column_spacing=12, row_spacing=12, homogeneous=True,
+                                  min_children_per_line=1, max_children_per_line=3,
+                                  selection_mode=Gtk.SelectionMode.NONE)
+        for item in (
                 card('本地核心状态', 'system-run-symbolic', self.service_value, self.service_detail),
                 card('规则代理/直连', 'network-transmit-receive-symbolic', self.proxy_value, self.proxy_detail),
                 card('ChatGPT 公开端点检测', 'web-browser-symbolic', self.openai_value, self.openai_detail,
-                     self.openai_btn))):
+                     self.openai_btn)):
             item.add_css_class('status-card')
-            status_grid.attach(item, column, 0, 1, 1)
+            item.set_size_request(180, -1)
+            status_grid.append(item)
         page.append(status_grid)
         self.current_node, self.node_detail = label('尚未选择', 'value', True), label('启动代理后可查看候选节点', 'detail', True)
         node_card = card('当前节点', 'network-server-symbolic', self.current_node, self.node_detail,
