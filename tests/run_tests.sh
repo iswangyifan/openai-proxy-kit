@@ -171,9 +171,19 @@ python3 "$INJ" inject --desktop-file "$DT/apps/app.desktop" --proxy http://127.0
   && [ "$(grep -c 'Exec=env http_proxy=' "$DT/apps/app.desktop")" = "2" ] \
   && ok_ "T7 注入（主 Exec + Action Exec 双注入）" || fail_ "T7 注入"
 
-python3 "$INJ" inject --desktop-file "$DT/apps/app.desktop" --proxy http://127.0.0.1:17890 \
-    --user-apps "$DT/apps" --backup-dir "$DT/backup" 2>&1 | grep -q '跳过（已注入）' \
-  && ok_ "T8 幂等（重复注入跳过）" || fail_ "T8 幂等"
+# 重复注入允许从原备份重建；幂等性由内容与恢复记录证明，不依赖日志措辞。
+if cp "$DT/apps/app.desktop" "$DT/injected-before.desktop" \
+    && cp "$DT/backup/app.desktop.orig" "$DT/original-before.desktop" \
+    && cp "$DT/backup/manifest.json" "$DT/manifest-before.json" \
+    && python3 "$INJ" inject --desktop-file "$DT/apps/app.desktop" --proxy http://127.0.0.1:17890 \
+        --user-apps "$DT/apps" --backup-dir "$DT/backup" >/dev/null 2>&1 \
+    && cmp -s "$DT/injected-before.desktop" "$DT/apps/app.desktop" \
+    && cmp -s "$DT/original-before.desktop" "$DT/backup/app.desktop.orig" \
+    && cmp -s "$DT/manifest-before.json" "$DT/backup/manifest.json"; then
+    ok_ "T8 幂等（重复注入后内容、备份与恢复记录不变）"
+else
+    fail_ "T8 幂等（重复注入失败或内容、备份、恢复记录发生变化）"
+fi
 
 python3 "$INJ" restore --user-apps "$DT/apps" --backup-dir "$DT/backup" >/dev/null 2>&1 \
   && diff -q "$DT/backup/app.desktop.orig" "$DT/apps/app.desktop" >/dev/null \
