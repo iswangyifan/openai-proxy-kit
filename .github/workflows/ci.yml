@@ -21,7 +21,17 @@ jobs:
           sudo apt-get install -y python3-gi python3-yaml gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-gdkpixbuf-2.0 librsvg2-common curl systemd iproute2 libglib2.0-bin util-linux dbus dconf-gsettings-backend gsettings-desktop-schemas xvfb dpkg-dev binutils
       - run: bash packaging/fetch-core.sh
       - run: bash packaging/build-linux.sh
-      - run: bash tests/check.sh
+      - name: Run bash tests/check.sh
+        run: |
+          check_log=$(mktemp)
+          if bash tests/check.sh >"$check_log" 2>&1; then
+            cat "$check_log"
+          else
+            cat "$check_log"
+            details=$(tail -n 20 "$check_log" | sed 's/%/%25/g; s/\r/%0D/g' | paste -sd '\n' - | sed ':a;N;$!ba;s/\n/%0A/g')
+            printf '::error title=完整检查失败::%s\n' "$details"
+            exit 1
+          fi
       - name: Check package metadata and checksum
         run: |
           dpkg-deb --info dist/openai-proxy-kit_*.deb
